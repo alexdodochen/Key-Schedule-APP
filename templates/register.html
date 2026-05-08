@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>排班機器人 — 申請帳號</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center py-10">
+  <div class="bg-white rounded-2xl shadow-lg p-10 w-full max-w-md">
+    <div class="text-center mb-8">
+      <div class="text-4xl mb-2">🏥</div>
+      <h1 class="text-xl font-bold text-gray-800">成大心臟血管科</h1>
+      <p class="text-gray-500 text-sm mt-1">申請排班系統帳號</p>
+    </div>
+
+    {% if success %}
+    <div class="bg-green-50 border border-green-300 text-green-800 rounded-lg px-4 py-4 mb-6 text-sm text-center">
+      <div class="text-2xl mb-1">✅</div>
+      <div class="font-semibold">{{ success | safe }}</div>
+      <a href="/login" class="mt-3 inline-block text-indigo-600 underline text-xs">回登入頁</a>
+    </div>
+    {% else %}
+
+    {% if error %}
+    <div class="bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 mb-4 text-sm">
+      {{ error }}
+    </div>
+    {% endif %}
+
+    <form method="POST" action="/register" class="space-y-4">
+
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">醫師姓名 <span class="text-red-500">*</span></label>
+          <input type="text" name="doctor_name" required
+            value="{{ form.doctor_name if form else '' }}"
+            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            placeholder="例：廖瑀">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">員工號 <span class="text-red-500">*</span></label>
+          <input type="text" name="employee_id" required
+            value="{{ form.employee_id if form else '' }}"
+            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            placeholder="例：A12345">
+        </div>
+      </div>
+
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">職級 <span class="text-red-500">*</span></label>
+          <select name="rank" required
+            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400">
+            <option value="">請選擇…</option>
+            <option value="VS主治醫師" {% if form and form.rank == 'VS主治醫師' %}selected{% endif %}>VS 主治醫師</option>
+            <option value="CR住院醫師" {% if form and form.rank == 'CR住院醫師' %}selected{% endif %}>CR 住院醫師</option>
+            <option value="Fellow研究醫師" {% if form and form.rank == 'Fellow研究醫師' %}selected{% endif %}>Fellow 研究醫師</option>
+            <option value="其他" {% if form and form.rank == '其他' %}selected{% endif %}>其他</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">開始訓練心臟內科（民國年）</label>
+          <input type="number" name="training_start_roc" min="90" max="130"
+            value="{{ form.training_start_roc if form else '' }}"
+            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            placeholder="例：110">
+        </div>
+      </div>
+
+      <hr class="border-gray-200">
+
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">帳號 <span class="text-red-500">*</span></label>
+        <input type="text" name="username" required
+          value="{{ form.username if form else '' }}"
+          class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          placeholder="自訂帳號名稱（英數字）">
+      </div>
+
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">密碼 <span class="text-red-500">*</span></label>
+          <input type="password" name="password" required minlength="6"
+            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            placeholder="至少 6 碼">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">確認密碼 <span class="text-red-500">*</span></label>
+          <input type="password" name="password2" required minlength="6"
+            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            placeholder="再輸入一次">
+        </div>
+      </div>
+
+      <p class="text-xs text-gray-400">送出後需等待管理者審核，審核通過後方可登入。</p>
+
+      <button type="submit"
+        class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2.5 rounded-lg transition text-sm">
+        送出申請
+      </button>
+    </form>
+
+    <p class="text-center text-sm text-gray-500 mt-4">
+      已有帳號？<a href="/login" class="text-indigo-600 hover:underline">登入</a>
+    </p>
+
+    {% endif %}
+  </div>
+<!-- Footer Credit -->
+<div class="fixed bottom-2 right-4 text-[10px] text-gray-400 pointer-events-none select-none">
+  應用程式由 114級 CV 陳常胤醫師 與 Claude code 及 Gemini CLI 合作開發
+</div>
+</body>
+</html>

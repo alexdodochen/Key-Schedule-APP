@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>管理者後台 — 排班機器人</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+
+<!-- Header -->
+<header class="bg-indigo-700 text-white shadow-md px-6 py-3 flex items-center justify-between">
+  <div class="flex items-center gap-2">
+    <span class="text-xl">🏥</span>
+    <span class="font-bold text-lg">管理者後台</span>
+    <span class="ml-2 text-xs bg-white/20 px-2 py-0.5 rounded-full">Admin</span>
+  </div>
+  <div class="flex items-center gap-4 text-sm">
+    <span class="opacity-80">{{ username }}</span>
+    <a href="/" class="bg-white/20 hover:bg-white/30 px-3 py-1 rounded-full transition">排班首頁</a>
+    <a href="/logout" class="bg-white/20 hover:bg-white/30 px-3 py-1 rounded-full transition">登出</a>
+  </div>
+</header>
+
+<main class="max-w-6xl mx-auto px-4 py-6 space-y-8">
+
+  <!-- ── 使用者管理 ──────────────────────────────────────────────── -->
+  <section class="bg-white rounded-xl shadow p-6">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-lg font-bold text-gray-800">使用者管理</h2>
+      <button onclick="loadUsers()"
+        class="text-xs bg-indigo-100 hover:bg-indigo-200 text-indigo-700 px-3 py-1.5 rounded-lg transition">
+        重新整理
+      </button>
+    </div>
+
+    <!-- 待審核提示 -->
+    <div id="pending-banner" class="hidden bg-amber-50 border border-amber-300 text-amber-800 rounded-lg px-4 py-3 mb-4 text-sm font-semibold"></div>
+
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="bg-gray-100 text-gray-600 text-left">
+            <th class="px-3 py-2 rounded-tl-lg">帳號</th>
+            <th class="px-3 py-2">醫師姓名</th>
+            <th class="px-3 py-2">員工號</th>
+            <th class="px-3 py-2">職級</th>
+            <th class="px-3 py-2">開始訓練（民國）</th>
+            <th class="px-3 py-2">角色</th>
+            <th class="px-3 py-2">狀態</th>
+            <th class="px-3 py-2">申請時間</th>
+            <th class="px-3 py-2 rounded-tr-lg">操作</th>
+          </tr>
+        </thead>
+        <tbody id="user-table-body">
+          <tr><td colspan="9" class="text-center text-gray-400 py-8">載入中…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ── 操作記錄 ───────────────────────────────────────────────── -->
+  <section class="bg-white rounded-xl shadow p-6">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-lg font-bold text-gray-800">操作記錄（最新 500 筆）</h2>
+      <div class="flex gap-2">
+        <input id="log-filter" type="text" placeholder="搜尋關鍵字…"
+          oninput="filterLogs()"
+          class="border border-gray-300 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-400 w-40">
+        <button onclick="loadLogs()"
+          class="text-xs bg-indigo-100 hover:bg-indigo-200 text-indigo-700 px-3 py-1.5 rounded-lg transition">
+          重新整理
+        </button>
+      </div>
+    </div>
+
+    <div class="overflow-x-auto">
+      <table class="w-full text-xs font-mono">
+        <thead>
+          <tr class="bg-gray-100 text-gray-600 text-left">
+            <th class="px-3 py-2 rounded-tl-lg">時間</th>
+            <th class="px-3 py-2">使用者</th>
+            <th class="px-3 py-2">IP</th>
+            <th class="px-3 py-2">動作</th>
+            <th class="px-3 py-2 rounded-tr-lg">說明</th>
+          </tr>
+        </thead>
+        <tbody id="log-table-body">
+          <tr><td colspan="5" class="text-center text-gray-400 py-8">載入中…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+</main>
+
+<script>
+let allLogs = [];
+
+// ── 使用者 ─────────────────────────────────────────────────────
+async function loadUsers() {
+  const res = await fetch('/api/admin/users');
+  const data = await res.json();
+  if (!data.ok) { alert('載入失敗: ' + data.error); return; }
+
+  const pending = data.users.filter(u => !u.approved);
+  const banner = document.getElementById('pending-banner');
+  if (pending.length > 0) {
+    banner.textContent = `⚠️ 有 ${pending.length} 位使用者待審核！`;
+    banner.classList.remove('hidden');
+  } else {
+    banner.classList.add('hidden');
+  }
+
+  const tbody = document.getElementById('user-table-body');
+  if (data.users.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="9" class="text-center text-gray-400 py-8">尚無使用者</td></tr>';
+    return;
+  }
+
+  // 未審核的排前面
+  const sorted = [...data.users].sort((a, b) => (a.approved ? 1 : 0) - (b.approved ? 1 : 0));
+
+  tbody.innerHTML = sorted.map(u => {
+    const statusBadge = u.approved
+      ? '<span class="bg-green-100 text-green-700 px-2 py-0.5 rounded-full text-xs">已核准</span>'
+      : '<span class="bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full text-xs animate-pulse">待審核</span>';
+
+    const roleBadge = u.role === 'admin'
+      ? '<span class="bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full text-xs">管理者</span>'
+      : '<span class="bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full text-xs">一般</span>';
+
+    const actions = u.role === 'admin' ? '<span class="text-gray-300 text-xs">—</span>' : `
+      ${!u.approved ? `<button onclick="approveUser('${u.username}')"
+        class="bg-green-600 hover:bg-green-700 text-white text-xs px-2 py-1 rounded transition mr-1">核准</button>` : ''}
+      <button onclick="deleteUser('${u.username}')"
+        class="bg-red-500 hover:bg-red-600 text-white text-xs px-2 py-1 rounded transition">刪除</button>
+    `;
+
+    return `<tr class="border-t border-gray-100 hover:bg-gray-50 ${!u.approved ? 'bg-amber-50' : ''}">
+      <td class="px-3 py-2 font-medium">${u.username}</td>
+      <td class="px-3 py-2">${u.doctor_name}</td>
+      <td class="px-3 py-2">${u.employee_id}</td>
+      <td class="px-3 py-2">${u.rank}</td>
+      <td class="px-3 py-2">${u.training_start_roc ?? '—'}</td>
+      <td class="px-3 py-2">${roleBadge}</td>
+      <td class="px-3 py-2">${statusBadge}</td>
+      <td class="px-3 py-2 text-gray-400">${u.created_at.slice(0,16).replace('T',' ')}</td>
+      <td class="px-3 py-2">${actions}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function approveUser(username) {
+  if (!confirm(`確定核准帳號「${username}」嗎？`)) return;
+  const res = await fetch(`/api/admin/approve/${encodeURIComponent(username)}`, { method: 'POST' });
+  const data = await res.json();
+  if (data.ok) { loadUsers(); loadLogs(); }
+  else alert('操作失敗: ' + data.error);
+}
+
+async function deleteUser(username) {
+  if (!confirm(`確定刪除帳號「${username}」？此操作不可復原。`)) return;
+  const res = await fetch(`/api/admin/delete/${encodeURIComponent(username)}`, { method: 'POST' });
+  const data = await res.json();
+  if (data.ok) { loadUsers(); loadLogs(); }
+  else alert('操作失敗: ' + data.error);
+}
+
+// ── 操作記錄 ───────────────────────────────────────────────────
+const ACTION_STYLE = {
+  login_success:     'bg-green-100 text-green-700',
+  login_fail:        'bg-red-100 text-red-700',
+  logout:            'bg-gray-100 text-gray-600',
+  register:          'bg-blue-100 text-blue-700',
+  admin_approve:     'bg-indigo-100 text-indigo-700',
+  admin_delete:      'bg-red-100 text-red-700',
+  schedule_start:    'bg-purple-100 text-purple-700',
+  schedule_done:     'bg-green-100 text-green-700',
+  schedule_cancel:   'bg-orange-100 text-orange-700',
+  schedule_continue: 'bg-purple-100 text-purple-700',
+  upload_excel:      'bg-cyan-100 text-cyan-700',
+  preview:           'bg-gray-100 text-gray-600',
+};
+
+async function loadLogs() {
+  const res = await fetch('/api/admin/logs');
+  const data = await res.json();
+  if (!data.ok) { alert('載入失敗: ' + data.error); return; }
+  allLogs = data.logs;
+  renderLogs(allLogs);
+}
+
+function renderLogs(logs) {
+  const tbody = document.getElementById('log-table-body');
+  if (logs.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" class="text-center text-gray-400 py-8">尚無記錄</td></tr>';
+    return;
+  }
+  tbody.innerHTML = logs.map(l => {
+    const cls = ACTION_STYLE[l.action] || 'bg-gray-100 text-gray-600';
+    return `<tr class="border-t border-gray-100 hover:bg-gray-50">
+      <td class="px-3 py-1.5 text-gray-500">${l.ts}</td>
+      <td class="px-3 py-1.5 font-semibold">${l.user}</td>
+      <td class="px-3 py-1.5 text-gray-400">${l.ip}</td>
+      <td class="px-3 py-1.5"><span class="px-2 py-0.5 rounded-full text-xs ${cls}">${l.action}</span></td>
+      <td class="px-3 py-1.5 text-gray-600">${l.detail || ''}</td>
+    </tr>`;
+  }).join('');
+}
+
+function filterLogs() {
+  const q = document.getElementById('log-filter').value.toLowerCase();
+  if (!q) { renderLogs(allLogs); return; }
+  renderLogs(allLogs.filter(l =>
+    Object.values(l).some(v => String(v).toLowerCase().includes(q))
+  ));
+}
+
+// ── 初始載入 ────────────────────────────────────────────────────
+loadUsers();
+loadLogs();
+// 每 30 秒自動更新
+setInterval(() => { loadUsers(); loadLogs(); }, 30000);
+</script>
+<!-- Footer Credit -->
+<div class="fixed bottom-2 right-4 text-[10px] text-gray-400 pointer-events-none select-none">
+  應用程式由 114級 CV 陳常胤醫師 與 Claude code 及 Gemini CLI 合作開發
+</div>
+</body>
+</html>

@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CV_APP — 主選單</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+
+<header class="bg-indigo-700 text-white shadow-md px-6 py-3 flex items-center justify-between">
+  <div class="flex items-center gap-2">
+    <span class="text-xl">🏥</span>
+    <span class="font-bold text-lg">心臟內科 CV_APP</span>
+    {% if is_admin %}
+    <span class="ml-2 text-xs bg-white/20 px-2 py-0.5 rounded-full">Admin</span>
+    {% endif %}
+  </div>
+  <div class="flex items-center gap-3 text-sm">
+    <span class="opacity-80">{{ username }}</span>
+    {% if is_admin %}
+    <a href="/admin" class="bg-white/20 hover:bg-white/30 px-3 py-1 rounded-full transition">後台</a>
+    {% endif %}
+    <a href="/logout" class="bg-white/20 hover:bg-white/30 px-3 py-1 rounded-full transition">登出</a>
+  </div>
+</header>
+
+<main class="max-w-5xl mx-auto px-4 py-12">
+  <h1 class="text-2xl font-bold text-gray-800 mb-2">請選擇要進入的功能</h1>
+  <p class="text-gray-500 mb-10">排班完成後可一鍵把資料帶入 key 班（Phase 2 開放）</p>
+
+  <div class="grid md:grid-cols-2 gap-6">
+    <a href="/sched"
+       class="block bg-white rounded-2xl shadow hover:shadow-lg transition p-8 border-2 border-transparent hover:border-indigo-400 group">
+      <div class="text-5xl mb-4 group-hover:scale-110 transition">📅</div>
+      <h2 class="text-xl font-bold text-gray-800 mb-2">排班</h2>
+      <p class="text-sm text-gray-500 leading-relaxed">
+        產生當月 CV 值班表 — 五步驟互動式：選月份 → 算 H/W → 設定展瀚 X →
+        看 VS / 建寬 班數 → 收偏好 → 跑 solver → 寫入 Google Sheet。
+      </p>
+      <div class="mt-5 inline-flex items-center text-indigo-600 text-sm font-semibold">
+        進入排班
+        <svg class="w-4 h-4 ml-1 group-hover:translate-x-1 transition" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+        </svg>
+      </div>
+    </a>
+
+    <div class="block bg-gray-100 rounded-2xl p-8 border-2 border-dashed border-gray-300 cursor-not-allowed select-none opacity-70">
+      <div class="text-5xl mb-4 grayscale">⌨️</div>
+      <h2 class="text-xl font-bold text-gray-500 mb-2">key 班</h2>
+      <p class="text-sm text-gray-400 leading-relaxed">
+        把產出的班表 key 進醫院 EDR 系統 — Phase 2 整合
+        <code class="bg-gray-200 px-1 rounded text-xs">Key-In-The-CVSchedule</code>
+        後啟用。
+      </p>
+      <div class="mt-5 inline-flex items-center bg-gray-200 text-gray-500 text-xs font-semibold px-3 py-1 rounded-full">
+        即將推出
+      </div>
+    </div>
+  </div>
+
+  <div class="mt-12 bg-white rounded-xl shadow p-6 text-sm text-gray-600">
+    <h3 class="font-bold text-gray-700 mb-3">系統提示</h3>
+    <ul class="list-disc list-inside space-y-1">
+      <li>所有班表會寫入 <code class="bg-gray-100 px-1 rounded text-xs">排班 GoogleSheet</code> — 同月可重跑前須先處理 baseline，避免重複累計</li>
+      <li>國定假日 / 連假以 <code class="bg-gray-100 px-1 rounded text-xs">gsheet_io.TAIWAN_HOLIDAYS</code> 為準（2025、2026 已含）</li>
+      <li>本機資料：<code class="bg-gray-100 px-1 rounded text-xs">.gsa.json</code>、<code class="bg-gray-100 px-1 rounded text-xs">users.json</code>、<code class="bg-gray-100 px-1 rounded text-xs">audit_log.jsonl</code></li>
+    </ul>
+  </div>
+</main>
+
+<div class="fixed bottom-2 right-4 text-[10px] text-gray-400 pointer-events-none select-none">
+  應用程式由 114級 CV 陳常胤醫師 與 Claude code 及 Gemini CLI 合作開發
+</div>
+</body>
+</html>

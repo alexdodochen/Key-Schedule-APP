@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>排班機器人 — 登入</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
+  <div class="bg-white rounded-2xl shadow-lg p-10 w-full max-w-sm">
+    <div class="text-center mb-8">
+      <div class="text-4xl mb-2">🏥</div>
+      <h1 class="text-xl font-bold text-gray-800">成大心臟血管科</h1>
+      <p class="text-gray-500 text-sm mt-1">排班自動化系統</p>
+    </div>
+
+    {% if error %}
+    <div class="bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 mb-4 text-sm">
+      {{ error }}
+    </div>
+    {% endif %}
+
+    <form method="POST" action="/login" class="space-y-4">
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">帳號</label>
+        <input type="text" name="username" required autofocus
+          class="w-full border border-gray-300 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          placeholder="請輸入帳號">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">密碼</label>
+        <input type="password" name="password" required minlength="6"
+          class="w-full border border-gray-300 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          placeholder="請輸入密碼（至少 6 碼）">
+      </div>
+      <button type="submit"
+        class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2.5 rounded-lg transition text-sm">
+        登入
+      </button>
+    </form>
+
+    <p class="text-center text-sm text-gray-500 mt-5">
+      還沒有帳號？<a href="/register" class="text-indigo-600 hover:underline">申請帳號</a>
+    </p>
+  </div>
+<!-- Footer Credit -->
+<div class="fixed bottom-2 right-4 text-[10px] text-gray-400 pointer-events-none select-none">
+  應用程式由 114級 CV 陳常胤醫師 與 Claude code 及 Gemini CLI 合作開發
+</div>
+</body>
+</html>

@@ -1,0 +1,12 @@
+fastapi>=0.110
+uvicorn[standard]>=0.27
+jinja2>=3.1
+python-multipart>=0.0.9
+bcrypt>=4.1
+python-jose[cryptography]>=3.3
+
+PyQt5>=5.15
+PyQtWebEngine>=5.15
+
+gspread>=6.0
+google-auth>=2.27

@@ -1,0 +1,35 @@
+# Secrets / credentials — never commit
+.gsa.json
+.secret_key
+users.json
+audit_log.jsonl
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Inspection clone of the keyin project — kept locally for reference only
+_reference_keyin/
+
+# Build output
+build/
+dist/
+*.spec

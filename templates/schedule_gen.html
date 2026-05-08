@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CV_APP — 排班</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .day-btn { transition: all 0.15s; }
+    .day-btn:hover:not(:disabled) { transform: translateY(-1px); }
+    .day-btn.selected { background-color: #4f46e5 !important; color: white !important; border-color: #4f46e5 !important; }
+    .day-btn.holiday { background-color: #fef3c7; }
+    .day-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .step-collapsed .step-body { display: none; }
+    .step-active { border-color: #4f46e5; }
+    .calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+    .cal-cell { min-height: 64px; padding: 4px 6px; border-radius: 6px; border: 1px solid #e5e7eb; font-size: 12px; }
+    .cal-cell.holiday { background-color: #fef3c7; border-color: #fbbf24; }
+    .cal-cell .doc { font-weight: 600; color: #4f46e5; font-size: 13px; margin-top: 4px; }
+    .cal-cell .qod { background-color: #fecaca; }
+  </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+
+<header class="bg-indigo-700 text-white shadow-md px-6 py-3 flex items-center justify-between">
+  <div class="flex items-center gap-2">
+    <span class="text-xl">📅</span>
+    <span class="font-bold text-lg">排班 — 五步驟</span>
+  </div>
+  <div class="flex items-center gap-3 text-sm">
+    <span class="opacity-80">{{ username }}</span>
+    <a href="/" class="bg-white/20 hover:bg-white/30 px-3 py-1 rounded-full transition">回主畫面</a>
+    <a href="/logout" class="bg-white/20 hover:bg-white/30 px-3 py-1 rounded-full transition">登出</a>
+  </div>
+</header>
+
+<main class="max-w-6xl mx-auto px-4 py-6 space-y-6">
+
+  <!-- ── Step 1 — 選月份 ────────────────────────────────────────── -->
+  <section id="step1" class="bg-white rounded-xl shadow border-2 step-active p-6">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-lg font-bold text-gray-800"><span class="text-indigo-600">1.</span> 選擇月份</h2>
+      <span class="text-xs text-gray-400">第一步</span>
+    </div>
+    <div class="step-body flex items-end gap-3">
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">年</label>
+        <input id="year" type="number" min="2024" max="2099" value="2026"
+          class="w-24 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-400 focus:outline-none">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">月</label>
+        <input id="month" type="number" min="1" max="12" value="6"
+          class="w-20 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-400 focus:outline-none">
+      </div>
+      <button id="btn-init"
+        class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-5 py-2 rounded-lg text-sm transition">
+        載入月份資料
+      </button>
+      <span id="init-status" class="text-sm text-gray-500"></span>
+    </div>
+  </section>
+
+  <!-- ── Step 2 — 顯示 H/W + 輸入 X ──────────────────────────────── -->
+  <section id="step2" class="bg-white rounded-xl shadow border-2 border-transparent p-6 hidden">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-lg font-bold text-gray-800"><span class="text-indigo-600">2.</span> 確認 H/W、設定展瀚 X</h2>
+      <span class="text-xs text-gray-400">第二步</span>
+    </div>
+    <div class="step-body space-y-5">
+      <div class="grid md:grid-cols-3 gap-4 text-sm">
+        <div class="bg-amber-50 border border-amber-200 rounded-lg p-4">
+          <div class="text-gray-500 text-xs">假日 H</div>
+          <div id="metric-h" class="text-2xl font-bold text-amber-700">—</div>
+        </div>
+        <div class="bg-indigo-50 border border-indigo-200 rounded-lg p-4">
+          <div class="text-gray-500 text-xs">平日 W</div>
+          <div id="metric-w" class="text-2xl font-bold text-indigo-700">—</div>
+        </div>
+        <div class="bg-gray-100 border border-gray-200 rounded-lg p-4">
+          <div class="text-gray-500 text-xs">當月分頁名</div>
+          <div id="metric-sheet" class="text-2xl font-bold text-gray-700">—</div>
+        </div>
+      </div>
+
+      <details class="bg-gray-50 rounded-lg p-3">
+        <summary class="cursor-pointer text-sm font-semibold text-gray-600">月曆預覽（假日黃底）</summary>
+        <div id="month-cal-preview" class="calendar-grid mt-3"></div>
+      </details>
+
+      <details class="bg-gray-50 rounded-lg p-3">
+        <summary class="cursor-pointer text-sm font-semibold text-gray-600">值班總數統計（baseline）</summary>
+        <div class="overflow-x-auto mt-3">
+          <table class="w-full text-xs">
+            <thead class="bg-gray-100"><tr id="baseline-head"></tr></thead>
+            <tbody id="baseline-body"></tbody>
+          </table>
+          <div id="baseline-warn" class="text-amber-700 text-xs mt-2"></div>
+        </div>
+      </details>
+
+      <div class="flex items-end gap-3 pt-2 border-t border-gray-100">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">展瀚 X（本月平日數）</label>
+          <input id="X" type="number" min="0" max="10" value="4"
+            class="w-24 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-400 focus:outline-none">
+        </div>
+        <button id="btn-compute"
+          class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-5 py-2 rounded-lg text-sm transition">
+          計算 VS / 建寬 班數
+        </button>
+        <span class="text-xs text-gray-400">註：X 一旦設定，後續不會再問是否更動</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Step 3 — 顯示計算結果 ──────────────────────────────────── -->
+  <section id="step3" class="bg-white rounded-xl shadow border-2 border-transparent p-6 hidden">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-lg font-bold text-gray-800"><span class="text-indigo-600">3.</span> 計算結果（VS / 建寬 / CR target）</h2>
+      <span class="text-xs text-gray-400">第三步</span>
+    </div>
+    <div class="step-body grid md:grid-cols-2 gap-5 text-sm">
+      <div>
+        <h3 class="font-semibold text-gray-700 mb-2">VS 班數（每位）</h3>
+        <table class="w-full border border-gray-200 rounded-lg overflow-hidden">
+          <thead class="bg-gray-100"><tr>
+            <th class="px-3 py-2 text-left">姓名</th><th class="px-3 py-2">假日</th><th class="px-3 py-2">平日</th><th class="px-3 py-2">合計</th>
+          </tr></thead>
+          <tbody id="vs-table"></tbody>
+        </table>
+        <p class="text-xs text-gray-500 mt-2">
+          建寬 平日：<span id="jk-count" class="font-bold text-indigo-600">—</span> 班
+        </p>
+      </div>
+      <div>
+        <h3 class="font-semibold text-gray-700 mb-2">CR 平衡 target（依累計分配）</h3>
+        <table class="w-full border border-gray-200 rounded-lg overflow-hidden">
+          <thead class="bg-gray-100"><tr>
+            <th class="px-3 py-2 text-left">姓名</th><th class="px-3 py-2">週五</th><th class="px-3 py-2">週六</th><th class="px-3 py-2">週日</th>
+          </tr></thead>
+          <tbody id="cr-target-table"><tr><td colspan="4" class="text-center text-gray-400 py-2 text-xs">由 solver 決定</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Step 4 — 收偏好 ─────────────────────────────────────────── -->
+  <section id="step4" class="bg-white rounded-xl shadow border-2 border-transparent p-6 hidden">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-lg font-bold text-gray-800"><span class="text-indigo-600">4.</span> 整批收偏好（VS / 展瀚 / 建寬 想值；CR 避開）</h2>
+      <span class="text-xs text-gray-400">第四步</span>
+    </div>
+    <div class="step-body space-y-4 text-sm">
+      <p class="text-xs text-gray-500">點擊每位醫師下方的日期方塊切換 — 紫色＝選中。假日格底色帶黃。</p>
+      <div id="prefs-container" class="space-y-3"></div>
+
+      <div class="flex items-center gap-3 pt-3 border-t border-gray-100">
+        <button id="btn-solve"
+          class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-5 py-2 rounded-lg text-sm transition">
+          ▶ 執行 solver
+        </button>
+        <span id="solve-status" class="text-sm text-gray-500"></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Step 5 — 結果預覽 + 寫入 ─────────────────────────────────── -->
+  <section id="step5" class="bg-white rounded-xl shadow border-2 border-transparent p-6 hidden">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-lg font-bold text-gray-800"><span class="text-indigo-600">5.</span> 排班結果 → 寫入 Google Sheet</h2>
+      <span class="text-xs text-gray-400">第五步</span>
+    </div>
+    <div class="step-body space-y-5 text-sm">
+      <div id="qod-warn" class="hidden bg-red-50 border border-red-300 text-red-800 rounded-lg px-4 py-3 text-sm"></div>
+
+      <div>
+        <h3 class="font-semibold text-gray-700 mb-2">排班月曆</h3>
+        <div class="grid grid-cols-7 gap-1 text-xs font-medium text-gray-500 mb-1 text-center">
+          <div>一</div><div>二</div><div>三</div><div>四</div><div>五</div><div>六</div><div>日</div>
+        </div>
+        <div id="result-cal" class="calendar-grid"></div>
+      </div>
+
+      <div>
+        <h3 class="font-semibold text-gray-700 mb-2">班數統計</h3>
+        <table class="w-full border border-gray-200 rounded-lg overflow-hidden text-xs">
+          <thead class="bg-gray-100"><tr>
+            <th class="px-3 py-2 text-left">姓名</th>
+            <th class="px-3 py-2">平日班</th><th class="px-3 py-2">週五班</th>
+            <th class="px-3 py-2">假日班</th><th class="px-3 py-2">週六班</th>
+            <th class="px-3 py-2">週日班</th><th class="px-3 py-2">QOD次數</th>
+          </tr></thead>
+          <tbody id="result-stats"></tbody>
+        </table>
+      </div>
+
+      <div class="flex items-center gap-3 pt-3 border-t border-gray-100">
+        <button id="btn-write"
+          class="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold px-5 py-2 rounded-lg text-sm transition">
+          ✓ 寫入 Google Sheet
+        </button>
+        <button id="btn-resolve"
+          class="bg-gray-200 hover:bg-gray-300 text-gray-700 font-semibold px-4 py-2 rounded-lg text-sm transition">
+          重新跑 solver
+        </button>
+        <span id="write-status" class="text-sm text-gray-500"></span>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<div class="fixed bottom-2 right-4 text-[10px] text-gray-400 pointer-events-none select-none">
+  應用程式由 114級 CV 陳常胤醫師 與 Claude code 及 Gemini CLI 合作開發
+</div>
+
+<script>
+const DOCTORS_CR  = {{ doctors_cr  | tojson }};
+const DOCTORS_VS  = {{ doctors_vs  | tojson }};
+const DOCTORS_MID = {{ doctors_mid | tojson }};
+
+// ── Application state ─────────────────────────────────────────────
+const state = {
+  year: null, month: null,
+  calendar: [],   // [{date, day, weekday, is_holiday, stat_type}, ...]
+  baseline: {},
+  H: 0, W: 0,
+  X: null,
+  prefs: {},      // {doctorName: Set<dateStr>} for VS/展瀚/建寬: prefer; for CR: avoid
+  lastSolve: null,
+};
+
+const WEEK_LABELS = ['一','二','三','四','五','六','日'];
+
+// ── helpers ─────────────────────────────────────────────────────────
+function $(id) { return document.getElementById(id); }
+function pad2(n) { return String(n).padStart(2, '0'); }
+
+function showStep(n) {
+  for (let i = 1; i <= 5; i++) {
+    const sec = $(`step${i}`);
+    if (i <= n) sec.classList.remove('hidden');
+    sec.classList.toggle('step-active', i === n);
+    sec.classList.toggle('border-transparent', i !== n);
+  }
+}
+
+function setStatus(id, text, kind='info') {
+  const el = $(id);
+  el.textContent = text;
+  el.className = 'text-sm';
+  if (kind === 'ok')   el.classList.add('text-emerald-600');
+  else if (kind === 'err')  el.classList.add('text-red-600');
+  else el.classList.add('text-gray-500');
+}
+
+async function postJSON(url, body) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  });
+  return await res.json();
+}
+
+// ── Step 1: load month data ─────────────────────────────────────────
+$('btn-init').addEventListener('click', async () => {
+  const year = parseInt($('year').value);
+  const month = parseInt($('month').value);
+  if (!year || !month || month < 1 || month > 12) {
+    setStatus('init-status', '請輸入有效年月', 'err'); return;
+  }
+  setStatus('init-status', '載入中…');
+  const data = await postJSON('/api/sched/init', {year, month});
+  if (!data.ok) {
+    setStatus('init-status', data.error || '載入失敗', 'err'); return;
+  }
+  state.year = data.year; state.month = data.month;
+  state.calendar = data.calendar; state.baseline = data.baseline;
+  state.H = data.H; state.W = data.W;
+  $('metric-h').textContent = data.H;
+  $('metric-w').textContent = data.W;
+  $('metric-sheet').textContent = `${data.year}${pad2(data.month)}`;
+  renderMonthPreview();
+  renderBaseline();
+  if (!data.sheet_ok) {
+    setStatus('init-status', `⚠️ 無法連 Google Sheet（baseline 全 0 帶入）— ${data.sheet_err}`, 'err');
+  } else {
+    setStatus('init-status', '✓ 已載入', 'ok');
+  }
+  showStep(2);
+});
+
+function renderMonthPreview() {
+  const grid = $('month-cal-preview');
+  // Insert blanks for days before the 1st
+  const first = new Date(state.year, state.month - 1, 1);
+  const startWeekday = (first.getDay() + 6) % 7; // Mon=0
+  let html = '';
+  ['一','二','三','四','五','六','日'].forEach(w => {
+    html += `<div class="text-center text-xs font-medium text-gray-500">${w}</div>`;
+  });
+  for (let i = 0; i < startWeekday; i++) html += '<div class="cal-cell" style="visibility:hidden"></div>';
+  state.calendar.forEach(d => {
+    const cls = d.is_holiday ? 'cal-cell holiday' : 'cal-cell';
+    html += `<div class="${cls}"><div class="font-bold">${d.day}</div><div class="text-[10px] text-gray-500">${d.stat_type}</div></div>`;
+  });
+  grid.innerHTML = html;
+}
+
+function renderBaseline() {
+  const all = [...DOCTORS_CR, ...DOCTORS_VS, ...DOCTORS_MID];
+  const cols = ['平日', '週五', '週六', '週日', '假日'];
+  $('baseline-head').innerHTML =
+    '<th class="px-2 py-1 text-left">姓名</th>' +
+    cols.map(c => `<th class="px-2 py-1">${c}</th>`).join('');
+  let body = '';
+  let warn = false;
+  all.forEach(n => {
+    const b = state.baseline[n] || {};
+    if (Object.keys(b).length === 0) warn = true;
+    body += `<tr class="border-t border-gray-200"><td class="px-2 py-1 font-semibold">${n}</td>` +
+            cols.map(c => `<td class="px-2 py-1 text-center">${b[c] ?? '—'}</td>`).join('') +
+            '</tr>';
+  });
+  $('baseline-body').innerHTML = body;
+  $('baseline-warn').textContent = warn
+    ? '⚠️ 部分醫師在「值班總數統計」找不到 — 平衡可能不準（可能是新進醫師或姓名拼法）'
+    : '';
+}
+
+// ── Step 2: compute VS / 建寬 / targets ─────────────────────────────
+$('btn-compute').addEventListener('click', async () => {
+  const X = parseInt($('X').value);
+  if (Number.isNaN(X) || X < 0) { alert('X 請輸入 ≥ 0 的整數'); return; }
+  state.X = X;
+  const data = await postJSON('/api/sched/compute', {
+    year: state.year, month: state.month, X, baseline: state.baseline,
+  });
+  if (!data.ok) { alert('計算失敗'); return; }
+  renderTargets(data.targets);
+  showStep(3);
+  buildPrefsForm();
+  showStep(4);
+});
+
+function renderTargets(t) {
+  const tbody = $('vs-table');
+  let html = '';
+  DOCTORS_VS.forEach(n => {
+    const v = t.vs_per_doctor[n] || {holiday: 0, weekday: 0};
+    const total = v.holiday + v.weekday;
+    html += `<tr class="border-t border-gray-200"><td class="px-3 py-2 font-medium">${n}</td>` +
+            `<td class="px-3 py-2 text-center">${v.holiday}</td>` +
+            `<td class="px-3 py-2 text-center">${v.weekday}</td>` +
+            `<td class="px-3 py-2 text-center font-bold">${total}</td></tr>`;
+  });
+  $('vs-table').innerHTML = html;
+  $('jk-count').textContent = t.jk_count;
+}
+
+// ── Step 4: build preference picker ─────────────────────────────────
+function buildPrefsForm() {
+  const container = $('prefs-container');
+  state.prefs = {};
+  let html = '';
+
+  function dayBtns(name, kind) {
+    return state.calendar.map(d => {
+      const isWeekday = !d.is_holiday;
+      const eligible = (kind === 'vs')          ? true               // VS picks any
+                     : (kind === 'mid_展瀚')     ? isWeekday          // 展瀚 weekday only
+                     : (kind === 'mid_建寬')     ? isWeekday          // 建寬 weekday only
+                     : (kind === 'cr')           ? true               // CR avoid any
+                     : true;
+      const dis = eligible ? '' : 'disabled';
+      const cls = ['day-btn', 'border', 'rounded', 'px-2', 'py-1', 'text-xs'];
+      if (d.is_holiday) cls.push('holiday');
+      else cls.push('bg-white');
+      cls.push('border-gray-300');
+      const wd = WEEK_LABELS[d.weekday];
+      return `<button type="button" class="${cls.join(' ')}" data-doctor="${name}" data-date="${d.date}" ${dis}>
+        ${d.day}<span class="text-[10px] ml-0.5 text-gray-500">${wd}</span>
+      </button>`;
+    }).join(' ');
+  }
+
+  function row(title, names, kind, hint) {
+    let inner = `<h3 class="font-semibold text-gray-700 mb-1">${title} <span class="text-xs text-gray-400 font-normal">${hint}</span></h3>`;
+    inner += names.map(n => `<div class="mb-2">
+      <div class="text-xs font-medium text-gray-600 mb-1">${n}</div>
+      <div class="flex flex-wrap gap-1" data-row="${n}" data-kind="${kind}">${dayBtns(n, kind)}</div>
+    </div>`).join('');
+    return `<div class="bg-gray-50 rounded-lg p-3">${inner}</div>`;
+  }
+
+  html += row('VS 偏好（想值的日期）', DOCTORS_VS, 'vs', '— 累計低者已自動分到假日；點以下日期表示偏好');
+  html += row('展瀚 偏好（X 個平日）', ['展瀚'], 'mid_展瀚', `— 目標 ${state.X} 班，僅平日`);
+  html += row('建寬 偏好（≤3 個平日）', ['建寬'], 'mid_建寬', '— 目標自動算，僅平日');
+  html += row('CR 避開（不想值的日期）', DOCTORS_CR, 'cr', '— 點選想避開的日期');
+
+  container.innerHTML = html;
+
+  // Toggle handlers
+  container.querySelectorAll('.day-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const doctor = btn.dataset.doctor;
+      const dateStr = btn.dataset.date;
+      if (!state.prefs[doctor]) state.prefs[doctor] = new Set();
+      if (state.prefs[doctor].has(dateStr)) {
+        state.prefs[doctor].delete(dateStr);
+        btn.classList.remove('selected');
+      } else {
+        state.prefs[doctor].add(dateStr);
+        btn.classList.add('selected');
+      }
+    });
+  });
+}
+
+// ── Step 5: solve ───────────────────────────────────────────────────
+$('btn-solve').addEventListener('click', async () => {
+  setStatus('solve-status', '計算中…');
+  const fixed = {};
+  const avoid = {};
+  // VS, 展瀚, 建寬 → fixed (if doctor name appears in DOCTORS_VS or DOCTORS_MID)
+  const inFixed = new Set([...DOCTORS_VS, ...DOCTORS_MID]);
+  const inAvoid = new Set(DOCTORS_CR);
+  for (const [doctor, dates] of Object.entries(state.prefs)) {
+    if (inFixed.has(doctor)) {
+      dates.forEach(d => { fixed[d] = doctor; });
+    } else if (inAvoid.has(doctor)) {
+      avoid[doctor] = Array.from(dates);
+    }
+  }
+  // Conflict check: same date assigned to multiple doctors → bail
+  const seen = {};
+  for (const [doctor, dates] of Object.entries(state.prefs)) {
+    if (!inFixed.has(doctor)) continue;
+    for (const d of dates) {
+      if (seen[d] && seen[d] !== doctor) {
+        setStatus('solve-status', `❌ ${d} 被 ${seen[d]} 與 ${doctor} 同時指定`, 'err');
+        return;
+      }
+      seen[d] = doctor;
+    }
+  }
+
+  const data = await postJSON('/api/sched/solve', {
+    year: state.year, month: state.month, X: state.X,
+    fixed, avoid, baseline: state.baseline,
+  });
+  if (!data.ok) {
+    setStatus('solve-status', `❌ ${data.error}`, 'err'); return;
+  }
+  state.lastSolve = data;
+  renderResult(data);
+  setStatus('solve-status',
+    data.qod_relaxed
+      ? `⚠️ QOD 已放寬，違規 ${data.qod_violations.length} 處（見紅底警告）`
+      : '✓ solver 完成',
+    data.qod_relaxed ? 'err' : 'ok');
+  showStep(5);
+  $('step5').scrollIntoView({behavior: 'smooth'});
+});
+
+function renderResult(data) {
+  // CR target table
+  const targets = data.targets;
+  let html = '';
+  DOCTORS_CR.forEach(n => {
+    html += `<tr class="border-t border-gray-200"><td class="px-3 py-2 font-medium">${n}</td>` +
+            `<td class="px-3 py-2 text-center">${targets.cr_fri_target[n] ?? 0}</td>` +
+            `<td class="px-3 py-2 text-center">${targets.cr_sat_target[n] ?? 0}</td>` +
+            `<td class="px-3 py-2 text-center">${targets.cr_sun_target[n] ?? 0}</td></tr>`;
+  });
+  $('cr-target-table').innerHTML = html;
+
+  // Calendar
+  const grid = $('result-cal');
+  const first = new Date(state.year, state.month - 1, 1);
+  const startWeekday = (first.getDay() + 6) % 7;
+  const byDate = {};
+  data.schedule.forEach(s => { byDate[s.date] = s; });
+  const qodSet = new Set(data.qod_violations.map(v => v.date));
+
+  let cells = '';
+  for (let i = 0; i < startWeekday; i++) cells += '<div class="cal-cell" style="visibility:hidden"></div>';
+  state.calendar.forEach(d => {
+    const s = byDate[d.date];
+    const docName = s ? s.doctor : '';
+    const cls = ['cal-cell'];
+    if (d.is_holiday) cls.push('holiday');
+    if (qodSet.has(d.date)) cls.push('qod');
+    cells += `<div class="${cls.join(' ')}">
+      <div class="font-bold flex items-center justify-between">
+        <span>${d.day}</span>
+        <span class="text-[10px] text-gray-500">${WEEK_LABELS[d.weekday]}</span>
+      </div>
+      <div class="doc">${docName}</div>
+    </div>`;
+  });
+  grid.innerHTML = cells;
+
+  // Stats
+  let stats = '';
+  data.stats_rows.forEach(r => {
+    const total = r.平日班 + r.週五班 + r.假日班;
+    if (total === 0) return;
+    stats += `<tr class="border-t border-gray-200"><td class="px-3 py-2 font-medium">${r.姓名}</td>` +
+             `<td class="px-3 py-2 text-center">${r.平日班}</td>` +
+             `<td class="px-3 py-2 text-center">${r.週五班}</td>` +
+             `<td class="px-3 py-2 text-center">${r.假日班}</td>` +
+             `<td class="px-3 py-2 text-center">${r.週六班}</td>` +
+             `<td class="px-3 py-2 text-center">${r.週日班}</td>` +
+             `<td class="px-3 py-2 text-center ${r.QOD次數 > 0 ? 'text-red-600 font-bold' : ''}">${r.QOD次數}</td></tr>`;
+  });
+  $('result-stats').innerHTML = stats;
+
+  // QOD warning
+  const w = $('qod-warn');
+  if (data.qod_violations.length > 0) {
+    w.classList.remove('hidden');
+    w.innerHTML = `<b>QOD 警告</b> — 有 ${data.qod_violations.length} 處隔日值班違規（紅底格子）：` +
+      data.qod_violations.map(v => `${v.date} ${v.name}`).join('；');
+  } else {
+    w.classList.add('hidden');
+  }
+}
+
+// ── write to Google Sheet ───────────────────────────────────────────
+$('btn-write').addEventListener('click', async () => {
+  if (!state.lastSolve) return;
+  if (!confirm('確定寫入 Google Sheet？同月不可重跑（baseline 會重複累計）')) return;
+  setStatus('write-status', '寫入中…');
+  const data = await postJSON('/api/sched/write', {
+    year: state.year, month: state.month,
+  });
+  if (!data.ok) { setStatus('write-status', '❌ ' + data.error, 'err'); return; }
+  setStatus('write-status', `✓ 已寫入 ${data.sheet_name} / 班數統計 / 值班總數統計`, 'ok');
+});
+
+$('btn-resolve').addEventListener('click', () => {
+  document.getElementById('btn-solve').click();
+});
+</script>
+
+</body>
+</html>
