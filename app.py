@@ -264,11 +264,15 @@ async def api_sched_init(request: Request):
             "day": d.day,
             "weekday": d.weekday(),
             "is_holiday": gsheet_io.is_taiwan_holiday(d),
+            "holiday_name": gsheet_io.taiwan_holiday_name(d),
             "stat_type": get_stat_type(d),
         })
+    prev_year, prev_month = gsheet_io.previous_year_month(year, month)
+    prev_tail: dict = {}
     try:
         sheet = gsheet_io.get_sheet()
         baseline = gsheet_io.load_cumulative_stats(sheet)
+        prev_tail = gsheet_io.read_calendar_tail(sheet, prev_year, prev_month, n=2)
         sheet_ok = True
         sheet_err = ""
     except Exception as e:
@@ -291,6 +295,11 @@ async def api_sched_init(request: Request):
             "vs": cv_solver.VS_LIST,
             "mid": cv_solver.INTER_MID,
         },
+        "prev_tail": {
+            d.strftime("%Y-%m-%d"): n for d, n in prev_tail.items()
+        },
+        "prev_year": prev_year,
+        "prev_month": prev_month,
         "sheet_ok": sheet_ok,
         "sheet_err": sheet_err,
     })
@@ -323,14 +332,17 @@ async def api_sched_solve(request: Request):
     avoid_in = body.get("avoid", {})
     baseline = body.get("baseline") or {}
     jk_target = body.get("jk_target")
+    prev_tail_in = body.get("prev_tail") or {}
 
     fixed = {_parse_iso_date(k): v for k, v in fixed_in.items() if v}
     avoid = {n: [_parse_iso_date(d) for d in dates]
              for n, dates in avoid_in.items() if dates}
+    prev_tail = {_parse_iso_date(k): v for k, v in prev_tail_in.items() if v}
 
     result = cv_solver.solve_month(
         year, month, X, fixed, avoid, baseline,
         jk_target=int(jk_target) if jk_target is not None else None,
+        prev_tail=prev_tail,
     )
     if result is None:
         audit.log("sched_solve_fail", user=user.username, ip=_client_ip(request),

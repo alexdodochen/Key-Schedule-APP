@@ -8,7 +8,14 @@
   <style>
     .day-btn { transition: all 0.15s; }
     .day-btn:hover:not(:disabled) { transform: translateY(-1px); }
-    .day-btn.selected { background-color: #4f46e5 !important; color: white !important; border-color: #4f46e5 !important; }
+    /* 「刷紫」效果：背景仍保留底色（黃=假日 / 白=平日），用半透明紫色覆蓋 + 紫色粗框 + 紫字 */
+    .day-btn.selected {
+      background-image: linear-gradient(rgba(79, 70, 229, 0.40), rgba(79, 70, 229, 0.40)) !important;
+      border-color: #4f46e5 !important;
+      box-shadow: inset 0 0 0 1px #4f46e5;
+      color: #312e81 !important;
+      font-weight: 700;
+    }
     .day-btn.holiday { background-color: #fef3c7; }
     .day-btn:disabled { opacity: 0.4; cursor: not-allowed; }
     .step-collapsed .step-body { display: none; }
@@ -17,7 +24,14 @@
     .cal-cell { min-height: 64px; padding: 4px 6px; border-radius: 6px; border: 1px solid #e5e7eb; font-size: 12px; }
     .cal-cell.holiday { background-color: #fef3c7; border-color: #fbbf24; }
     .cal-cell .doc { font-weight: 600; color: #4f46e5; font-size: 13px; margin-top: 4px; }
-    .cal-cell .qod { background-color: #fecaca; }
+    /* QOD 違規格 — 用粗紅框搭配淺紅背景 (假日格仍保留黃底，僅換紅框) */
+    .cal-cell.qod {
+      border: 3px solid #dc2626 !important;
+      background-color: #fecaca;
+      box-shadow: 0 0 0 1px #dc2626 inset;
+    }
+    .cal-cell.qod.holiday { background-color: #fef3c7; }
+    .cal-cell.qod .doc { color: #b91c1c; }
   </style>
 </head>
 <body class="bg-gray-50 min-h-screen">
@@ -81,6 +95,11 @@
         </div>
       </div>
 
+      <div id="prev-tail-box" class="hidden bg-rose-50 border border-rose-200 rounded-lg p-3 text-sm">
+        <div class="font-semibold text-rose-800 mb-1">上月末值班（跨月限制）</div>
+        <div id="prev-tail-content" class="text-rose-700"></div>
+      </div>
+
       <details class="bg-gray-50 rounded-lg p-3">
         <summary class="cursor-pointer text-sm font-semibold text-gray-600">月曆預覽（假日黃底）</summary>
         <div id="month-cal-preview" class="calendar-grid mt-3"></div>
@@ -127,9 +146,14 @@
           </tr></thead>
           <tbody id="vs-table"></tbody>
         </table>
-        <p class="text-xs text-gray-500 mt-2">
-          建寬 平日：<span id="jk-count" class="font-bold text-indigo-600">—</span> 班
-        </p>
+
+        <h3 class="font-semibold text-gray-700 mt-4 mb-2">建寬 班數</h3>
+        <table class="w-full border border-gray-200 rounded-lg overflow-hidden">
+          <thead class="bg-gray-100"><tr>
+            <th class="px-3 py-2 text-left">姓名</th><th class="px-3 py-2">假日</th><th class="px-3 py-2">平日</th><th class="px-3 py-2">合計</th>
+          </tr></thead>
+          <tbody id="jk-table"></tbody>
+        </table>
       </div>
       <div>
         <h3 class="font-semibold text-gray-700 mb-2">CR 平衡 target（依累計分配）</h3>
@@ -227,8 +251,10 @@ const state = {
   year: null, month: null,
   calendar: [],   // [{date, day, weekday, is_holiday, stat_type}, ...]
   baseline: {},
+  prevTail: {},   // {dateStr: name} — last 2 days of previous month for cross-month rules
   H: 0, W: 0,
   X: null,
+  targets: null,  // result of /api/sched/compute — vs_per_doctor, jk_count, ...
   prefs: {},      // {doctorName: Set<dateStr>} for VS/展瀚/建寬: prefer; for CR: avoid
   lastSolve: null,
 };
@@ -238,6 +264,12 @@ const WEEK_LABELS = ['一','二','三','四','五','六','日'];
 // ── helpers ─────────────────────────────────────────────────────────
 function $(id) { return document.getElementById(id); }
 function pad2(n) { return String(n).padStart(2, '0'); }
+function addDays(dateStr, n) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + n);
+  return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
+}
 
 function showStep(n) {
   for (let i = 1; i <= 5; i++) {
@@ -280,12 +312,14 @@ $('btn-init').addEventListener('click', async () => {
   }
   state.year = data.year; state.month = data.month;
   state.calendar = data.calendar; state.baseline = data.baseline;
+  state.prevTail = data.prev_tail || {};
   state.H = data.H; state.W = data.W;
   $('metric-h').textContent = data.H;
   $('metric-w').textContent = data.W;
   $('metric-sheet').textContent = `${data.year}${pad2(data.month)}`;
   renderMonthPreview();
   renderBaseline();
+  renderPrevTail(data.prev_year, data.prev_month);
   if (!data.sheet_ok) {
     setStatus('init-status', `⚠️ 無法連 Google Sheet（baseline 全 0 帶入）— ${data.sheet_err}`, 'err');
   } else {
@@ -306,9 +340,47 @@ function renderMonthPreview() {
   for (let i = 0; i < startWeekday; i++) html += '<div class="cal-cell" style="visibility:hidden"></div>';
   state.calendar.forEach(d => {
     const cls = d.is_holiday ? 'cal-cell holiday' : 'cal-cell';
-    html += `<div class="${cls}"><div class="font-bold">${d.day}</div><div class="text-[10px] text-gray-500">${d.stat_type}</div></div>`;
+    const holidayLine = d.holiday_name
+      ? `<div class="text-[10px] text-red-600 font-semibold leading-tight">${d.holiday_name}</div>`
+      : '';
+    html += `<div class="${cls}"><div class="font-bold">${d.day}</div>${holidayLine}<div class="text-[10px] text-gray-500">${d.stat_type}</div></div>`;
   });
   grid.innerHTML = html;
+}
+
+function renderPrevTail(prevYear, prevMonth) {
+  const box = $('prev-tail-box');
+  const content = $('prev-tail-content');
+  const entries = Object.entries(state.prevTail || {});
+  if (entries.length === 0) {
+    box.classList.add('hidden');
+    return;
+  }
+  // entries[i] = [dateStr, name]; sort ascending by date
+  entries.sort((a, b) => a[0].localeCompare(b[0]));
+  const lines = entries.map(([d, n]) => {
+    const day = parseInt(d.split('-')[2], 10);
+    return `${prevMonth}/${day} <b>${n}</b>`;
+  });
+  // Compute the implied exclusions in this month: last day → day 1 (back-to-back),
+  // last 2 days → day 1 / day 2 (QOD)
+  const last = entries[entries.length - 1];
+  const lastName = last[1];
+  const exclusions = [`<b>${state.month}/1</b> 不可排 <b>${lastName}</b>（連兩天）`];
+  // last day → +2 = day 2 QOD
+  exclusions.push(`<b>${state.month}/2</b> 不可排 <b>${lastName}</b>（QOD）`);
+  if (entries.length >= 2) {
+    const prevName = entries[0][1];
+    if (prevName !== lastName) {
+      exclusions.push(`<b>${state.month}/1</b> 不可排 <b>${prevName}</b>（QOD）`);
+    } else {
+      exclusions[0] += `；<b>${state.month}/1</b> 同名 QOD 也排除`;
+    }
+  }
+  content.innerHTML =
+    `${prevYear}/${prevMonth} 末值班：${lines.join('、')}<br>` +
+    `→ 已自動排除：${exclusions.join('、')}`;
+  box.classList.remove('hidden');
 }
 
 function renderBaseline() {
@@ -341,14 +413,60 @@ $('btn-compute').addEventListener('click', async () => {
     year: state.year, month: state.month, X, baseline: state.baseline,
   });
   if (!data.ok) { alert('計算失敗'); return; }
+  state.targets = data.targets;
   renderTargets(data.targets);
   showStep(3);
   buildPrefsForm();
   showStep(4);
 });
 
+// 取得指定 VS / 展瀚 / 建寬 應該選的（假日, 平日）數；CR 回傳 null（CR 用 avoid）
+function getTargetForName(name) {
+  if (!state.targets) return null;
+  if (DOCTORS_VS.includes(name)) {
+    const v = state.targets.vs_per_doctor[name] || {holiday: 0, weekday: 0};
+    return {holiday: v.holiday || 0, weekday: v.weekday || 0};
+  }
+  if (name === '展瀚') return {holiday: 0, weekday: state.X || 0};
+  if (name === '建寬') return {holiday: 0, weekday: state.targets.jk_count || 0};
+  return null;
+}
+
+function countSelected(name) {
+  const selected = state.prefs[name] || new Set();
+  let h = 0, w = 0;
+  selected.forEach(dateStr => {
+    const d = state.calendar.find(c => c.date === dateStr);
+    if (!d) return;
+    if (d.is_holiday) h++; else w++;
+  });
+  return {holiday: h, weekday: w};
+}
+
+function updatePrefCount(name) {
+  const target = getTargetForName(name);
+  const el = document.querySelector(`[data-target-for="${name}"]`);
+  if (!el || !target) return;
+  const got = countSelected(name);
+  const ok = got.holiday === target.holiday && got.weekday === target.weekday;
+  el.innerHTML = `已選 ${got.holiday} 假 / ${got.weekday} 平 ｜ 應選 ${target.holiday} 假 / ${target.weekday} 平`;
+  el.className = `text-[11px] ml-2 px-2 py-0.5 rounded-full ${ok ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700 font-bold'}`;
+}
+
+function validatePrefs() {
+  const errors = [];
+  [...DOCTORS_VS, '展瀚', '建寬'].forEach(name => {
+    const t = getTargetForName(name);
+    if (!t) return;
+    const got = countSelected(name);
+    if (got.holiday !== t.holiday || got.weekday !== t.weekday) {
+      errors.push(`${name}：應選 ${t.holiday} 假 / ${t.weekday} 平，目前 ${got.holiday} 假 / ${got.weekday} 平`);
+    }
+  });
+  return errors;
+}
+
 function renderTargets(t) {
-  const tbody = $('vs-table');
   let html = '';
   DOCTORS_VS.forEach(n => {
     const v = t.vs_per_doctor[n] || {holiday: 0, weekday: 0};
@@ -359,7 +477,14 @@ function renderTargets(t) {
             `<td class="px-3 py-2 text-center font-bold">${total}</td></tr>`;
   });
   $('vs-table').innerHTML = html;
-  $('jk-count').textContent = t.jk_count;
+
+  // 建寬 — only weekday slots; render in same 4-column shape as VS table.
+  const jk = t.jk_count || 0;
+  $('jk-table').innerHTML =
+    `<tr class="border-t border-gray-200"><td class="px-3 py-2 font-medium">建寬</td>` +
+    `<td class="px-3 py-2 text-center">0</td>` +
+    `<td class="px-3 py-2 text-center">${jk}</td>` +
+    `<td class="px-3 py-2 text-center font-bold">${jk}</td></tr>`;
 }
 
 // ── Step 4: build preference picker ─────────────────────────────────
@@ -390,10 +515,16 @@ function buildPrefsForm() {
 
   function row(title, names, kind, hint) {
     let inner = `<h3 class="font-semibold text-gray-700 mb-1">${title} <span class="text-xs text-gray-400 font-normal">${hint}</span></h3>`;
-    inner += names.map(n => `<div class="mb-2">
-      <div class="text-xs font-medium text-gray-600 mb-1">${n}</div>
-      <div class="flex flex-wrap gap-1" data-row="${n}" data-kind="${kind}">${dayBtns(n, kind)}</div>
-    </div>`).join('');
+    inner += names.map(n => {
+      const hasTarget = getTargetForName(n) !== null;
+      const counter = hasTarget ? `<span data-target-for="${n}" class="text-[11px] ml-2"></span>` : '';
+      return `<div class="mb-2">
+        <div class="text-xs font-medium text-gray-600 mb-1 flex items-center">
+          <span>${n}</span>${counter}
+        </div>
+        <div class="flex flex-wrap gap-1" data-row="${n}" data-kind="${kind}">${dayBtns(n, kind)}</div>
+      </div>`;
+    }).join('');
     return `<div class="bg-gray-50 rounded-lg p-3">${inner}</div>`;
   }
 
@@ -417,12 +548,27 @@ function buildPrefsForm() {
         state.prefs[doctor].add(dateStr);
         btn.classList.add('selected');
       }
+      updatePrefCount(doctor);
     });
   });
+
+  // Render initial counts (all 0 selected vs target)
+  [...DOCTORS_VS, '展瀚', '建寬'].forEach(updatePrefCount);
 }
 
 // ── Step 5: solve ───────────────────────────────────────────────────
 $('btn-solve').addEventListener('click', async () => {
+  // 偏好總數 vs 計算結果驗證 — 不一致則跳警告，使用者可選擇強制執行
+  const prefErrors = validatePrefs();
+  if (prefErrors.length > 0) {
+    const msg = '⚠️ 偏好選擇與計算的班數不一致：\n\n• ' +
+      prefErrors.join('\n• ') +
+      '\n\n按「確定」仍要強制執行 solver（solver 會嘗試自動補齊或可能找不到解）；按「取消」回去調整。';
+    if (!confirm(msg)) {
+      setStatus('solve-status', '已取消，請調整偏好讓選擇日數與班數一致', 'err');
+      return;
+    }
+  }
   setStatus('solve-status', '計算中…');
   const fixed = {};
   const avoid = {};
@@ -452,6 +598,7 @@ $('btn-solve').addEventListener('click', async () => {
   const data = await postJSON('/api/sched/solve', {
     year: state.year, month: state.month, X: state.X,
     fixed, avoid, baseline: state.baseline,
+    prev_tail: state.prevTail,
   });
   if (!data.ok) {
     setStatus('solve-status', `❌ ${data.error}`, 'err'); return;
@@ -460,8 +607,8 @@ $('btn-solve').addEventListener('click', async () => {
   renderResult(data);
   setStatus('solve-status',
     data.qod_relaxed
-      ? `⚠️ QOD 已放寬，違規 ${data.qod_violations.length} 處（見紅底警告）`
-      : '✓ solver 完成',
+      ? `⚠️ 嚴格無 QOD 不可行，已最小化至 ${data.qod_violations.length} 處違規（紅底）`
+      : '✓ solver 完成（無 QOD 違規）',
     data.qod_relaxed ? 'err' : 'ok');
   showStep(5);
   $('step5').scrollIntoView({behavior: 'smooth'});
@@ -485,7 +632,13 @@ function renderResult(data) {
   const startWeekday = (first.getDay() + 6) % 7;
   const byDate = {};
   data.schedule.forEach(s => { byDate[s.date] = s; });
-  const qodSet = new Set(data.qod_violations.map(v => v.date));
+  // Highlight BOTH ends of each QOD pair. Backend only returns the earlier
+  // date per pair, so we expand by adding +2 days to mark the partner cell.
+  const qodSet = new Set();
+  data.qod_violations.forEach(v => {
+    qodSet.add(v.date);
+    qodSet.add(addDays(v.date, 2));
+  });
 
   let cells = '';
   for (let i = 0; i < startWeekday; i++) cells += '<div class="cal-cell" style="visibility:hidden"></div>';
@@ -495,11 +648,15 @@ function renderResult(data) {
     const cls = ['cal-cell'];
     if (d.is_holiday) cls.push('holiday');
     if (qodSet.has(d.date)) cls.push('qod');
+    const holidayLine = d.holiday_name
+      ? `<div class="text-[10px] text-red-600 font-semibold leading-tight">${d.holiday_name}</div>`
+      : '';
     cells += `<div class="${cls.join(' ')}">
       <div class="font-bold flex items-center justify-between">
         <span>${d.day}</span>
         <span class="text-[10px] text-gray-500">${WEEK_LABELS[d.weekday]}</span>
       </div>
+      ${holidayLine}
       <div class="doc">${docName}</div>
     </div>`;
   });
@@ -524,7 +681,7 @@ function renderResult(data) {
   const w = $('qod-warn');
   if (data.qod_violations.length > 0) {
     w.classList.remove('hidden');
-    w.innerHTML = `<b>QOD 警告</b> — 有 ${data.qod_violations.length} 處隔日值班違規（紅底格子）：` +
+    w.innerHTML = `<b>QOD 警告</b> — 此月在嚴格不允許 QOD 條件下無解，已最小化為 ${data.qod_violations.length} 處隔日值班違規（紅底格子）：` +
       data.qod_violations.map(v => `${v.date} ${v.name}`).join('；');
   } else {
     w.classList.add('hidden');
@@ -547,6 +704,15 @@ $('btn-write').addEventListener('click', async () => {
 });
 
 $('btn-resolve').addEventListener('click', () => {
+  // 清掉舊班表 → 視覺上強調這是全新一輪 solve，避免使用者誤以為按了沒反應
+  state.lastSolve = null;
+  $('result-cal').innerHTML = '';
+  $('result-stats').innerHTML = '';
+  $('cr-target-table').innerHTML =
+    '<tr><td colspan="4" class="text-center text-gray-400 py-2 text-xs">由 solver 決定</td></tr>';
+  $('qod-warn').classList.add('hidden');
+  setStatus('write-status', '');
+  setStatus('solve-status', '清除舊班表，重新生成中…');
   document.getElementById('btn-solve').click();
 });
 

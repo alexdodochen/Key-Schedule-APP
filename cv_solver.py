@@ -17,6 +17,7 @@ Rules (mirror CLAUDE.md in the 排班 project):
 from __future__ import annotations
 
 import calendar
+import random
 from datetime import date, timedelta
 from typing import Optional
 
@@ -26,6 +27,9 @@ CRS: list[str] = ["麒翔", "見賢", "常胤"]
 VS_LIST: list[str] = ["廖瑀", "昭佑", "朝允", "則瑋"]
 INTER_MID: list[str] = ["展瀚", "建寬"]
 ALL_DOCTORS: list[str] = CRS + VS_LIST + INTER_MID
+
+# 不受 QOD / 不連兩天硬規則約束 — 想哪天值就哪天值。CR 仍嚴格遵守。
+QOD_EXEMPT_NAMES: set[str] = set(VS_LIST) | {"展瀚", "建寬"}
 
 CR_TOTAL_CAP = 7
 JK_WEEKDAY_CAP = 3
@@ -143,6 +147,9 @@ def compute_initial_targets(year: int, month: int, X: int, baseline: dict) -> di
 
 
 # ── Step 5: solve ───────────────────────────────────────────────────
+QOD_RELAX_CAP = 10  # 最多嘗試放寬到這麼多 QOD 違規；超過視為實在無解
+
+
 def solve_month(
     year: int,
     month: int,
@@ -151,6 +158,8 @@ def solve_month(
     avoid: dict[str, list[date]],
     baseline: dict,
     jk_target: Optional[int] = None,
+    seed: Optional[int] = None,
+    prev_tail: Optional[dict[date, str]] = None,
 ) -> Optional[dict]:
     """Run the backtracking solver. Returns None when no feasible schedule
     exists even after relaxing QOD; otherwise returns:
@@ -162,9 +171,19 @@ def solve_month(
         qod_violations: [(date, name), ...],
         qod_relaxed: bool,
       }
+
+    QOD 政策：嚴禁 QOD（除展瀚之外）為硬規則。先用 max_qod=0 解一次；不行
+    才以最少違規方式逐步放寬（max_qod=1, 2, ...）。回傳時 qod_relaxed=True
+    僅表示「strict 確實解不了」，且 qod_violations 數量永遠是滿足整個月
+    其他硬性規則（CR cap、平衡、avoid、back-to-back）下的最小值。
+
+    `seed` 控制候選排序的隨機 tie-break — 預設 None 表示每次呼叫使用全新
+    亂數，重新跑 solver 會得到不同（但仍合規）的班表，方便挑選備案。
     """
     days = month_days(year, month)
     get_stat_type = make_stat_type_fn(is_taiwan_holiday)
+    rng = random.Random(seed)
+    prev_tail = prev_tail or {}
 
     if jk_target is None:
         H, W = month_h_w(year, month)
@@ -181,10 +200,11 @@ def solve_month(
         "cr_sun_target": cr_sun_target,
     }
 
-    for strict in (True, False):
+    for max_qod in range(QOD_RELAX_CAP + 1):
         result = _backtrack_run(
             days, fixed, avoid, baseline, jk_target,
-            get_stat_type, targets, strict_qod=strict,
+            get_stat_type, targets, max_qod=max_qod, rng=rng,
+            prev_tail=prev_tail,
         )
         if result is not None:
             schedule = result
@@ -195,7 +215,8 @@ def solve_month(
                 "stats_rows": stats_rows,
                 "monthly_stats_map": monthly_map,
                 "qod_violations": qod_violations,
-                "qod_relaxed": not strict,
+                "qod_relaxed": max_qod > 0,
+                "max_qod": max_qod,
                 "targets": targets,
             }
     return None
@@ -236,10 +257,12 @@ def _category_target(
 # ── Internal: backtracking ──────────────────────────────────────────
 def _backtrack_run(
     days, fixed, avoid, baseline, jk_target,
-    get_stat_type, targets, strict_qod: bool,
+    get_stat_type, targets, max_qod: int, rng: random.Random,
+    prev_tail: Optional[dict[date, str]] = None,
 ) -> Optional[dict[date, str]]:
     num_days = len(days)
     schedule: dict[date, str] = dict(fixed)
+    prev_tail = prev_tail or {}
     cr_w = {n: 0 for n in CRS}
     cr_h = {n: 0 for n in CRS}
     cr_fri = {n: 0 for n in CRS}
@@ -269,32 +292,52 @@ def _backtrack_run(
     if jk_count > jk_target:
         return None
 
+    # 先把已存在的 QOD pair 算進預算 — 只算 CR；VS/展瀚/建寬 豁免
+    fixed_pairs = 0
+    for d, name in fixed.items():
+        if name in QOD_EXEMPT_NAMES:
+            continue
+        d2 = d + timedelta(days=2)
+        if fixed.get(d2) == name:
+            fixed_pairs += 1
+        d_minus_2 = d - timedelta(days=2)
+        if prev_tail.get(d_minus_2) == name:
+            fixed_pairs += 1
+    if fixed_pairs > max_qod:
+        return None
+    qod_used = fixed_pairs
+
     open_days = [d for d in days if d not in fixed]
+    # 隨機處理順序：讓「重新跑 solver」每次以不同的日期當第一決策點，
+    # 探索不同分支 → 產出明顯不同的合規班表。所有硬規則（QOD 預算、
+    # back-to-back、CR cap、平衡 target、avoid）都用 schedule.get() 檢查
+    # 絕對日期鄰居，與處理順序無關，所以打亂順序不影響正確性。
+    rng.shuffle(open_days)
     cr_fri_target = targets["cr_fri_target"]
     cr_sat_target = targets["cr_sat_target"]
     cr_sun_target = targets["cr_sun_target"]
 
+    def neighbor_doctor(target_idx: int) -> Optional[str]:
+        """Lookup the doctor at relative day index `target_idx` in this month;
+        if it falls before day 1, fall back to prev_tail (last days of the
+        previous month) so back-to-back / QOD checks span the boundary."""
+        if 0 <= target_idx < num_days:
+            return schedule.get(days[target_idx])
+        if target_idx < 0:
+            return prev_tail.get(days[0] + timedelta(days=target_idx))
+        return None
+
     def qod_score(name: str, d_idx: int) -> int:
-        if name == "展瀚":
+        if name in QOD_EXEMPT_NAMES:
             return 0
         s = 0
         for off in (-2, 2):
-            j = d_idx + off
-            if 0 <= j < num_days and schedule.get(days[j]) == name:
+            if neighbor_doctor(d_idx + off) == name:
                 s += 1
         return s
 
-    def is_qod_conflict(name: str, d_idx: int) -> bool:
-        if name == "展瀚":
-            return False
-        for off in (-2, 2):
-            j = d_idx + off
-            if 0 <= j < num_days and schedule.get(days[j]) == name:
-                return True
-        return False
-
     def backtrack(i: int) -> bool:
-        nonlocal jk_count
+        nonlocal jk_count, qod_used
         if i == len(open_days):
             return True
         d = open_days[i]
@@ -309,25 +352,32 @@ def _backtrack_run(
 
         def sort_key(name: str) -> tuple:
             qp = qod_score(name, d_idx)
+            # 在 balance 上加 ±1.5 的隨機 jitter — 讓 baseline / running count
+            # 差距 ≤1 的醫師有機會輪換。重新跑 solver 因此產出明顯不同的
+            # 合規班表；硬規則（QOD 預算、CR cap、target、avoid、back-to-back）
+            # 不受影響。jitter 範圍刻意保守，避免 backtracking 探索過大空間。
             if name == "建寬":
-                return (qp, 99, 99)
+                return (qp, 99, 99, rng.random())
             cum_key = {"週五班": "週五", "週六班": "週六", "週日班": "週日"}.get(stat, "平日")
             count_dict = {"週五班": cr_fri, "週六班": cr_sat, "週日班": cr_sun}.get(stat, cr_w)
             return (
                 qp,
-                baseline.get(name, {}).get(cum_key, 0) + count_dict[name],
+                baseline.get(name, {}).get(cum_key, 0) + count_dict[name] + rng.uniform(0, 1.49),
                 cr_w[name] + cr_h[name],
+                rng.random(),
             )
 
         candidates.sort(key=sort_key)
 
         for name in candidates:
-            if name != "展瀚":
-                if d_idx > 0 and schedule.get(days[d_idx - 1]) == name:
+            if name not in QOD_EXEMPT_NAMES:
+                # back-to-back 跨月檢查：第一天若 prev_tail 最後一天同名 → 拒絕
+                if neighbor_doctor(d_idx - 1) == name:
                     continue
-                if d_idx < num_days - 1 and schedule.get(days[d_idx + 1]) == name:
+                if neighbor_doctor(d_idx + 1) == name:
                     continue
-            if strict_qod and is_qod_conflict(name, d_idx):
+            qod_inc = qod_score(name, d_idx)
+            if qod_used + qod_inc > max_qod:
                 continue
             if name in avoid and d in avoid[name]:
                 continue
@@ -346,6 +396,7 @@ def _backtrack_run(
                 continue
 
             schedule[d] = name
+            qod_used += qod_inc
             if name in CRS:
                 if is_h:
                     cr_h[name] += 1
@@ -376,6 +427,7 @@ def _backtrack_run(
                     cr_sun[name] -= 1
             if name == "建寬":
                 jk_count -= 1
+            qod_used -= qod_inc
             del schedule[d]
 
         return False
@@ -399,7 +451,7 @@ def _compute_stats(schedule: dict[date, str], get_stat_type) -> tuple[list[dict]
             "週五班": sum(1 for d in personal if get_stat_type(d) == "週五班"),
             "週六班": sum(1 for d in personal if get_stat_type(d) == "週六班"),
             "週日班": sum(1 for d in personal if get_stat_type(d) == "週日班"),
-            "QOD次數": _qod_count(personal_set),
+            "QOD次數": 0 if name in QOD_EXEMPT_NAMES else _qod_count(personal_set),
         }
         stats_rows.append(row)
         by_name[name] = row
@@ -416,7 +468,7 @@ def _scan_qod(schedule: dict[date, str]) -> list[tuple[date, str]]:
         by_doctor.setdefault(n, set()).add(d)
     violations: list[tuple[date, str]] = []
     for n, ds in by_doctor.items():
-        if n == "展瀚":
+        if n in QOD_EXEMPT_NAMES:
             continue
         for d in sorted(ds):
             if (d + timedelta(days=2)) in ds:

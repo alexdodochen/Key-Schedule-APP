@@ -21,7 +21,7 @@ called from a FastAPI endpoint.
 
 ## Running and developing
 
-- **Desktop launch:** `啟動.bat` → `python main.py`. Spawns uvicorn on
+- **Desktop launch:** `CV_APP 心臟內科排班整合.bat` → `python main.py`. Spawns uvicorn on
   `127.0.0.1:8765` in a daemon thread, then opens `QWebEngineView`. Idle >
   30 min auto-closes the window.
 - **Web-only dev:** `uvicorn app:app --host 127.0.0.1 --port 8765`. Open
@@ -104,17 +104,38 @@ them directly.
 ### Solver (`cv_solver.py`)
 
 **Pure functions; no I/O.** `solve_month(year, month, X, fixed, avoid,
-baseline, jk_target=None)` returns a dict with:
+baseline, jk_target=None, seed=None, prev_tail=None)` returns a dict with:
 - `schedule`: `{date: name}` complete monthly assignment
 - `stats_rows`: per-doctor counts (平日/週五/假日/週六/週日/QOD次數)
 - `monthly_stats_map`: same data keyed by name (for `update_cumulative_stats`)
-- `qod_violations`: list of `(date, name)` if QOD relaxation was needed
-- `qod_relaxed`: bool — `True` means strict QOD failed, surfaced with
-  red-bordered cells in the UI
+- `qod_violations`: list of `(date, name)` — minimised QOD pairs (each entry
+  is the EARLIER date of a pair; UI expands to highlight both ends)
+- `qod_relaxed`: bool — `True` means strict (`max_qod=0`) was infeasible
+  and the solver had to relax. The number of violations is still minimised.
+- `max_qod`: int — the minimum budget that yielded a feasible schedule.
 - `targets`: per-CR 週五/週六/週日 targets (for the result page)
 
-Two passes: strict QOD first; if no feasible schedule, retry with QOD
-relaxed and surface every violation in `qod_violations`. Hard caps:
+**Constraint design** (see `memory/project_solver_design.md`):
+- **QOD 豁免名單** `QOD_EXEMPT_NAMES = set(VS_LIST) | {"展瀚", "建寬"}` —
+  these names bypass the QOD-pair / back-to-back hard rules in 5 places
+  (`qod_score`, candidate back-to-back filter, `fixed_pairs` precount,
+  `_scan_qod`, `_compute_stats`). Only CRs (麒翔/見賢/常胤) are constrained.
+- **最少 QOD 放寬** — `for max_qod in range(QOD_RELAX_CAP + 1)` from 0
+  upward; first feasible budget wins. `qod_used` budget pruning inside
+  backtracking. No more "strict / relaxed" binary — `qod_violations` count
+  is always the minimum given other hard rules.
+- **跨月約束** — `prev_tail: dict[date, str]` (last 2 days of previous month)
+  is passed in; `neighbor_doctor(target_idx)` falls back to `prev_tail` for
+  `target_idx < 0` so back-to-back / QOD checks span the boundary.
+  Pre-counted cross-month QOD pairs in `fixed_pairs`. Read via
+  `gsheet_io.read_calendar_tail(sheet, year, month, n=2)`.
+- **重跑必差異** — three layers of randomness so re-running `solve_month`
+  produces visibly different feasible schedules: (a) `rng.shuffle(open_days)`,
+  (b) `rng.uniform(0, 1.49)` jitter on balance term in `sort_key`, (c)
+  `rng.random()` final tiebreak. Jitter is intentionally capped at ±1.5 —
+  larger ranges (tested ±3) blow up the search space on edge cases.
+
+Hard caps (still enforced):
 - CR total ≤ 7/month
 - Per-category 週五/週六/週日 hard cap from balanced targets
   (`_category_target` accounts for fixed VS/中級 pre-pinned days)
@@ -127,12 +148,22 @@ the explicit check keeps the relaxation logic out of the hot path.
 
 ### Google Sheets (`gsheet_io.py`)
 
-Copied verbatim from `C:\Users\dr\Downloads\Y\排班\gsheet_io.py`. Same
-SHEET_ID, same `TAIWAN_HOLIDAYS` (2025+2026, including 下半年). When adding
-a new year's holidays, update **both** copies — the parent project (which
-has its own scripts) and this app. Long-term goal: make CV_APP the single
-source of truth and have the parent scripts import from here, but for
-Phase 1 they live independently.
+Originally copied verbatim from `C:\Users\dr\Downloads\Y\排班\gsheet_io.py`,
+now diverged with CV_APP-only additions. Same SHEET_ID, same
+`TAIWAN_HOLIDAYS` (2025+2026, including 下半年). When adding a new year's
+holidays, update **both** the parent project's copy and this one — plus
+`TAIWAN_HOLIDAY_NAMES` (CV_APP-only, used to label `端午節` etc. in the
+preview calendar).
+
+CV_APP-only helpers (don't backport without the same need):
+- `taiwan_holiday_name(d) -> str` — returns the holiday's Chinese name
+  (empty for weekends or non-holidays).
+- `previous_year_month(year, month) -> (year, month)` — handles the
+  January boundary.
+- `read_calendar_tail(sheet, year, month, n=2) -> dict[date, str]` —
+  parses a `{YYYYMM}` calendar tab and returns the last `n` filled days.
+  Used by `/api/sched/init` to feed the solver's cross-month constraint.
+  Returns `{}` if the tab doesn't exist (first time using app).
 
 ### Templates (`templates/`)
 
@@ -145,6 +176,21 @@ Phase 1 they live independently.
   complete (`showStep(n)`). Preference selection uses clickable date
   buttons (no native date pickers — the user wanted to see all month days
   at once with holiday badges).
+  - **Step 2** surfaces a rose-coloured info box if `prev_tail` is non-empty,
+    listing the previous month's last days and the auto-derived exclusions
+    (`6/1 不可排 X` etc.). Holiday names (端午節 …) are shown beneath each
+    day in the preview calendar.
+  - **Step 4** shows a real-time `已選 vs 應選` chip next to each
+    VS/展瀚/建寬 row (green when matching, red bold when not). `validatePrefs()`
+    runs on solve-click; mismatches trigger a confirm dialog with override.
+  - **Selected day-button styling** uses `linear-gradient(rgba(...))` overlay
+    so the underlying yellow (holiday) / white (weekday) bg stays visible.
+  - **QOD highlight**: `.cal-cell.qod` class (NOT `.cal-cell .qod` — that
+    descendant selector was a bug) gives a 3 px solid red border. Frontend
+    expands `qod_violations` to mark BOTH ends of each pair (`addDays(date, 2)`).
+  - **「重新跑 solver」按鈕** clears the result calendar / stats / target
+    table before triggering a fresh `/api/sched/solve` call, so the user
+    visibly sees a "clear → refill" rather than wondering if anything changed.
 
 ## Doctor roster
 

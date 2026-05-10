@@ -51,10 +51,38 @@ TAIWAN_HOLIDAYS: set[date] = {
     date(2026, 12, 25),  # 行憲紀念日 (五)
 }
 
+# 國定假日對應的中文名稱 — 給 UI 顯示用（週末沒有名稱，故僅含非週末假日）
+TAIWAN_HOLIDAY_NAMES: dict[date, str] = {
+    date(2025, 9, 29):  "教師節補假",
+    date(2025, 10, 6):  "中秋節",
+    date(2025, 10, 10): "國慶日",
+    date(2025, 10, 24): "光復節補假",
+    date(2025, 12, 25): "行憲紀念日",
+    date(2026, 1, 1):   "元旦",
+    date(2026, 2, 16):  "除夕",
+    date(2026, 2, 17):  "春節初一",
+    date(2026, 2, 18):  "春節初二",
+    date(2026, 2, 19):  "春節初三",
+    date(2026, 2, 20):  "春節連假",
+    date(2026, 2, 27):  "228 補假",
+    date(2026, 4, 3):   "兒童節",
+    date(2026, 4, 6):   "清明補假",
+    date(2026, 5, 1):   "勞動節",
+    date(2026, 6, 19):  "端午節",
+    date(2026, 10, 9):  "國慶補假",
+    date(2026, 10, 26): "光復節補假",
+    date(2026, 12, 25): "行憲紀念日",
+}
+
 
 def is_taiwan_holiday(d: date) -> bool:
     """Return True if d is a public holiday (weekend or official non-weekend holiday)."""
     return d.weekday() >= 5 or d in TAIWAN_HOLIDAYS
+
+
+def taiwan_holiday_name(d: date) -> str:
+    """Return the official Chinese name for non-weekend holidays; '' otherwise."""
+    return TAIWAN_HOLIDAY_NAMES.get(d, "")
 
 
 def make_stat_type_fn(is_holiday_fn):
@@ -100,6 +128,48 @@ def _ensure_worksheet(sheet, title, rows, cols):
     except gspread.exceptions.WorksheetNotFound:
         ws = sheet.add_worksheet(title=title, rows=rows, cols=cols)
     return ws
+
+
+def previous_year_month(year: int, month: int) -> tuple[int, int]:
+    """Return (year, month) of the calendar month immediately before (year, month)."""
+    return (year - 1, 12) if month == 1 else (year, month - 1)
+
+
+def read_calendar_tail(sheet, year: int, month: int, n: int = 2) -> dict[date, str]:
+    """Read the last `n` filled days from the {YYYYMM} calendar tab.
+
+    Returns {date: doctor_name}. Empty dict if the tab doesn't exist (e.g.
+    the previous month was never written through this app). Used by the
+    solver to enforce cross-month rules:
+      - 不連兩天：day 1 of this month must differ from last day of prev month
+      - QOD：day 1/2 of this month vs prev's last 2 days (D ↔ D+2 pair)
+    """
+    sheet_name = f"{year}{month:02d}"
+    try:
+        ws = sheet.worksheet(sheet_name)
+    except gspread.exceptions.WorksheetNotFound:
+        return {}
+    all_values = ws.get_all_values()
+    if not all_values or len(all_values) < 2:
+        return {}
+
+    month_cal = calendar.monthcalendar(year, month)
+    result: dict[date, str] = {}
+    for r_idx, week in enumerate(month_cal):
+        # date_row at 2*r_idx + 1, name_row at 2*r_idx + 2 (header is row 0)
+        name_row_idx = r_idx * 2 + 2
+        if name_row_idx >= len(all_values):
+            break
+        name_row = all_values[name_row_idx]
+        for c_idx, day in enumerate(week):
+            if day == 0 or c_idx >= len(name_row):
+                continue
+            name = (name_row[c_idx] or '').strip()
+            if name:
+                result[date(year, month, day)] = name
+
+    sorted_dates = sorted(result.keys(), reverse=True)
+    return {d: result[d] for d in sorted_dates[:n]}
 
 
 def write_calendar_sheet(sheet, sheet_name, year, month, result, is_holiday_fn):
