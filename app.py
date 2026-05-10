@@ -13,6 +13,7 @@ Routes:
 """
 from __future__ import annotations
 
+import json
 import os
 from datetime import date, datetime
 from pathlib import Path
@@ -25,14 +26,18 @@ from fastapi.templating import Jinja2Templates
 
 import audit
 from auth import (
-    approve_user, get_admin_names, get_all_users, login_user, register_user,
-    reject_delete_user, verify_token,
+    TokenData, approve_user, get_admin_names, get_all_users, login_user,
+    register_user, reject_delete_user, verify_token,
 )
 import cv_solver
 import gsheet_io
+import keyin_routes
 
 BASE_DIR = Path(__file__).parent
+HISTORY_DIR = BASE_DIR / "schedule_history"
+HISTORY_DIR.mkdir(exist_ok=True)
 app = FastAPI(title="CV_APP — 心臟內科排班整合")
+app.include_router(keyin_routes.router, prefix="/keyin")
 
 static_dir = BASE_DIR / "static"
 static_dir.mkdir(exist_ok=True)
@@ -43,14 +48,13 @@ _solve_cache: dict[str, Any] = {}
 
 
 # ── helpers ─────────────────────────────────────────────────────────
+# Login is bypassed for the local desktop app — every request is treated as
+# the synthetic "local" admin. Restore the cookie/JWT check below to re-enable.
+_LOCAL_USER = TokenData("local", "admin")
+
+
 def _get_user(request: Request):
-    token = request.cookies.get("token")
-    if not token:
-        return None
-    try:
-        return verify_token(token)
-    except Exception:
-        return None
+    return _LOCAL_USER
 
 
 def _client_ip(request: Request) -> str:
@@ -78,9 +82,11 @@ def _serialize_schedule(schedule: dict[date, str]) -> list[dict]:
 
 
 # ── auth pages ──────────────────────────────────────────────────────
-@app.get("/login", response_class=HTMLResponse)
+# Login is bypassed — these endpoints redirect straight to the home menu so
+# the desktop app opens directly into the app.
+@app.get("/login")
 async def login_page(request: Request):
-    return templates.TemplateResponse(request, "login.html", {"error": ""})
+    return RedirectResponse(url="/")
 
 
 @app.post("/login")
@@ -109,12 +115,8 @@ async def do_login(request: Request):
 
 @app.get("/logout")
 async def logout(request: Request):
-    user = _get_user(request)
-    if user:
-        audit.log("logout", user=user.username, ip=_client_ip(request))
-    resp = RedirectResponse(url="/login")
-    resp.delete_cookie("token")
-    return resp
+    # Login is bypassed — nothing to log out from. Bounce back to the home menu.
+    return RedirectResponse(url="/")
 
 
 @app.get("/register", response_class=HTMLResponse)
@@ -363,6 +365,53 @@ async def api_sched_solve(request: Request):
     })
 
 
+@app.post("/api/sched/handoff-to-keyin")
+async def api_sched_handoff(request: Request):
+    """Bridge: take the cached cv_solver schedule and stage it as a keyin prefill.
+
+    Splits the {date: name} schedule into vs_schedule (VS_LIST) and cr_schedule
+    (CRS + INTER_MID), keyed by day-of-month. Records tw_holidays for the month
+    so the keyin UI can pre-check holiday rows. The prefill is one-shot — it is
+    consumed (popped) by the next /keyin/api/prefill call.
+    """
+    user = _get_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "未登入"}, status_code=401)
+    body = await request.json()
+    year  = int(body["year"])
+    month = int(body["month"])
+    cache_key = f"{user.username}:{year}{month:02d}"
+    cached = _solve_cache.get(cache_key)
+    if cached is None:
+        return JSONResponse({"ok": False, "error": "請先按「solve」產生班表，再進入 key 班"})
+
+    schedule: dict[date, str] = cached["schedule"]
+    vs_schedule: dict[int, str] = {}
+    cr_schedule: dict[int, str] = {}
+    for d, name in schedule.items():
+        if name in cv_solver.VS_LIST:
+            vs_schedule[d.day] = name
+        elif name in cv_solver.CRS or name in cv_solver.INTER_MID:
+            cr_schedule[d.day] = name
+
+    tw_holidays = [
+        d.strftime("%Y-%m-%d")
+        for d in cv_solver.month_days(year, month)
+        if gsheet_io.is_taiwan_holiday(d)
+    ]
+
+    keyin_routes.prefill_cache[user.username] = {
+        "year": year,
+        "month": month,
+        "vs_schedule": vs_schedule,
+        "cr_schedule": cr_schedule,
+        "tw_holidays": tw_holidays,
+    }
+    audit.log("sched_handoff_keyin", user=user.username, ip=_client_ip(request),
+              detail=f"{year}/{month:02d} VS={len(vs_schedule)} CR={len(cr_schedule)}")
+    return JSONResponse({"ok": True, "redirect": "/keyin"})
+
+
 @app.post("/api/sched/write")
 async def api_sched_write(request: Request):
     user = _get_user(request)
@@ -381,9 +430,19 @@ async def api_sched_write(request: Request):
     monthly_stats_map = cached["monthly_stats_map"]
     baseline = cached["baseline"]
     sheet_name = f"{year}{month:02d}"
+    history_path = HISTORY_DIR / f"{sheet_name}.json"
 
+    # Recover the previous monthly contribution so re-running the same month
+    # doesn't double-count in the cumulative tab. The sheet's own
+    # `{YYYYMM} 班數統計` tab is the source of truth here — it's written in
+    # the same /api/sched/write call as the cumulative tab, so the two are
+    # always consistent regardless of what's on disk locally.
     try:
         sheet = gsheet_io.get_sheet()
+        previous_monthly = gsheet_io.read_monthly_stats(
+            sheet, f"{sheet_name} 班數統計",
+        )
+
         gsheet_io.write_calendar_sheet(
             sheet, sheet_name, year, month, schedule,
             gsheet_io.is_taiwan_holiday,
@@ -392,12 +451,39 @@ async def api_sched_write(request: Request):
             sheet, f"{sheet_name} 班數統計", stats_rows,
             headers=gsheet_io.DEFAULT_MONTHLY_HEADERS + ["QOD次數"],
         )
-        gsheet_io.update_cumulative_stats(sheet, baseline, monthly_stats_map)
+        gsheet_io.update_cumulative_stats(
+            sheet, baseline, monthly_stats_map,
+            previous_monthly=previous_monthly,
+        )
     except Exception as e:
         audit.log("sched_write_fail", user=user.username, ip=_client_ip(request),
                   detail=f"{sheet_name}: {e}")
         return JSONResponse({"ok": False, "error": f"寫入失敗：{e}"})
 
+    # Snapshot the just-written state for human-readable history. This file
+    # is for traceability only — the subtract-on-rewrite logic above reads
+    # from the sheet's own monthly tab, so this snapshot is not required for
+    # cumulative correctness. Commit it to git when you want to share the
+    # detailed schedule with collaborators.
+    history_path.write_text(
+        json.dumps({
+            "year": year,
+            "month": month,
+            "X": cached.get("X"),
+            "written_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+            "written_by": user.username,
+            "schedule": {d.strftime("%Y-%m-%d"): n for d, n in schedule.items()},
+            "stats_rows": stats_rows,
+            "monthly_stats_map": monthly_stats_map,
+        }, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
     audit.log("sched_write", user=user.username, ip=_client_ip(request),
               detail=sheet_name)
-    return JSONResponse({"ok": True, "sheet_name": sheet_name})
+    return JSONResponse({
+        "ok": True,
+        "sheet_name": sheet_name,
+        "history_file": str(history_path.relative_to(BASE_DIR)).replace("\\", "/"),
+        "rewrite": bool(previous_monthly),
+    })

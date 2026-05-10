@@ -28,9 +28,7 @@
     <span class="font-bold text-lg">排班 — 五步驟</span>
   </div>
   <div class="flex items-center gap-3 text-sm">
-    <span class="opacity-80">{{ username }}</span>
     <a href="/" class="bg-white/20 hover:bg-white/30 px-3 py-1 rounded-full transition">回主畫面</a>
-    <a href="/logout" class="bg-white/20 hover:bg-white/30 px-3 py-1 rounded-full transition">登出</a>
   </div>
 </header>
 
@@ -203,6 +201,10 @@
         <button id="btn-resolve"
           class="bg-gray-200 hover:bg-gray-300 text-gray-700 font-semibold px-4 py-2 rounded-lg text-sm transition">
           重新跑 solver
+        </button>
+        <button id="btn-handoff-keyin"
+          class="bg-cyan-600 hover:bg-cyan-700 text-white font-semibold px-4 py-2 rounded-lg text-sm transition">
+          下一步：到 key 班 →
         </button>
         <span id="write-status" class="text-sm text-gray-500"></span>
       </div>
@@ -532,17 +534,33 @@ function renderResult(data) {
 // ── write to Google Sheet ───────────────────────────────────────────
 $('btn-write').addEventListener('click', async () => {
   if (!state.lastSolve) return;
-  if (!confirm('確定寫入 Google Sheet？同月不可重跑（baseline 會重複累計）')) return;
+  if (!confirm('確定寫入 Google Sheet？')) return;
   setStatus('write-status', '寫入中…');
   const data = await postJSON('/api/sched/write', {
     year: state.year, month: state.month,
   });
   if (!data.ok) { setStatus('write-status', '❌ ' + data.error, 'err'); return; }
-  setStatus('write-status', `✓ 已寫入 ${data.sheet_name} / 班數統計 / 值班總數統計`, 'ok');
+  const msg = data.rewrite
+    ? `✓ 已重寫 ${data.sheet_name}（自動扣掉上次累計，再加新版）`
+    : `✓ 已寫入 ${data.sheet_name} / 班數統計 / 值班總數統計`;
+  setStatus('write-status', msg, 'ok');
 });
 
 $('btn-resolve').addEventListener('click', () => {
   document.getElementById('btn-solve').click();
+});
+
+$('btn-handoff-keyin').addEventListener('click', async () => {
+  if (!state.lastSolve) return;
+  setStatus('write-status', '正在帶入 key 班…');
+  const data = await postJSON('/api/sched/handoff-to-keyin', {
+    year: state.year, month: state.month,
+  });
+  if (!data.ok) {
+    setStatus('write-status', `❌ ${data.error}`, 'err');
+    return;
+  }
+  window.location.href = data.redirect || '/keyin';
 });
 </script>
 

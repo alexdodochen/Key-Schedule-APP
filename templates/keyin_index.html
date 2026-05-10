@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CV_APP — key 班</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .day-holiday { background: #fef3c7; }
+    .day-weekend { background: #fde8e8; }
+    
+    /* 可編輯下拉選單樣式 */
+    .combo-container {
+      position: relative;
+      width: 100%;
+      height: 28px;
+    }
+    .combo-select {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      padding: 4px 6px;
+      font-size: 0.8rem;
+      background: white;
+      cursor: pointer;
+    }
+    .combo-input {
+      position: absolute;
+      top: 1px; left: 1px;
+      /* 留出右側箭頭空間 */
+      width: calc(100% - 22px);
+      height: calc(100% - 2px);
+      border: none;
+      border-radius: 5px 0 0 5px;
+      padding: 0 8px;
+      font-size: 0.8rem;
+      z-index: 10;
+    }
+    .combo-input:focus { outline: none; }
+    .combo-container:focus-within .combo-select {
+      border-color: #6366f1;
+      box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+    }
+
+    #log-box { font-family: monospace; font-size: 0.78rem; }
+    .step-badge {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 24px; height: 24px; border-radius: 50%;
+      background: #6366f1; color: white; font-size: 0.75rem; font-weight: 700;
+      margin-right: 8px; flex-shrink: 0;
+    }
+  </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+
+<!-- Header -->
+<header class="bg-indigo-700 text-white shadow-md px-6 py-3 flex items-center justify-between">
+  <div class="flex items-center gap-2">
+    <span class="text-xl">⌨️</span>
+    <span class="font-bold text-lg">CV_APP — key 班（成大 EDR 排班自動化）</span>
+  </div>
+  <div class="flex items-center gap-3 text-sm">
+    <a href="/" class="bg-white/20 hover:bg-white/30 px-3 py-1 rounded-full transition">← 主選單</a>
+  </div>
+</header>
+
+<!-- 內部使用聲明 -->
+<div class="bg-red-50 border-b border-red-200 text-red-700 text-center py-2 px-4 text-xs font-medium">
+  ⚠️ 此網站僅限成大醫院心臟內科內部使用，請勿外流
+</div>
+
+<!-- 執行中橫幅 -->
+<div id="banner-waiting" class="hidden bg-amber-400 text-amber-900 text-center py-3 px-4 font-semibold">
+  ⏳ 請在彈出的瀏覽器視窗中完成登入，再按「▶ 繼續排班」
+</div>
+<div id="banner-running" class="hidden bg-green-500 text-white text-center py-3 px-4 font-semibold">
+  🤖 排班機器人執行中…
+</div>
+<div id="banner-done" class="hidden bg-green-600 text-white text-center py-3 px-4 font-semibold">
+  ✅ 排班完成！請確認網頁結果
+</div>
+<div id="banner-error" class="hidden bg-red-500 text-white text-center py-3 px-4 font-semibold">
+  ❌ 執行發生錯誤，詳見進度記錄
+</div>
+
+<main class="max-w-5xl mx-auto px-4 py-6 space-y-6">
+
+  <!-- ── STEP 1: 月份 ─────────────────────────────────────── -->
+  <section class="bg-white rounded-xl shadow p-5">
+    <h2 class="font-bold text-gray-700 text-base mb-4 flex items-center">
+      <span class="step-badge">1</span>選擇排班月份
+    </h2>
+    <div class="flex items-end gap-4">
+      <div>
+        <label class="text-sm text-gray-600 block mb-1">年份</label>
+        <input id="inp-year" type="number" value="2026" min="2024" max="2030"
+          class="border border-gray-300 rounded-lg px-3 py-2 text-sm w-28 focus:outline-none focus:ring-2 focus:ring-indigo-400">
+      </div>
+      <div>
+        <label class="text-sm text-gray-600 block mb-1">月份</label>
+        <select id="inp-month"
+          class="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400">
+          <option value="1">1月</option><option value="2">2月</option>
+          <option value="3">3月</option><option value="4">4月</option>
+          <option value="5" selected>5月</option><option value="6">6月</option>
+          <option value="7">7月</option><option value="8">8月</option>
+          <option value="9">9月</option><option value="10">10月</option>
+          <option value="11">11月</option><option value="12">12月</option>
+        </select>
+      </div>
+      <button onclick="generateCalendar()"
+        class="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2 rounded-lg text-sm font-semibold transition">
+        生成排班表 →
+      </button>
+    </div>
+  </section>
+
+  <!-- ── STEP 1.5: 上傳 Excel ────────────────────────────── -->
+  <section id="sec-upload" class="hidden bg-white rounded-xl shadow p-5">
+    <h2 class="font-bold text-gray-700 text-base mb-1 flex items-center">
+      <span class="step-badge" style="background:#0891b2">↑</span>上傳排班表 Excel（自動解析）
+    </h2>
+    <p class="text-xs text-gray-500 mb-3 ml-8">支援 .xls / .xlsx。系統自動辨識日期欄、VS 欄、CR 欄並套用至排班表。</p>
+
+    <div class="flex items-center gap-3 mb-3">
+      <input type="file" id="upload-file" accept=".xls,.xlsx"
+        class="text-sm border border-gray-300 rounded-lg px-3 py-2 cursor-pointer">
+      <button onclick="doUpload()"
+        class="bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition">
+        解析排班表
+      </button>
+    </div>
+
+    <!-- 警告訊息 -->
+    <div id="upload-warnings" class="hidden mb-3 bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800 space-y-1"></div>
+
+    <!-- 解析結果預覽 -->
+    <div id="upload-result" class="hidden">
+      <div class="flex items-center justify-between mb-2">
+        <span id="upload-summary" class="text-sm font-semibold text-gray-700"></span>
+        <button onclick="applyParsedSchedule()"
+          class="bg-green-600 hover:bg-green-700 text-white px-4 py-1.5 rounded-lg text-sm font-semibold transition">
+          ✓ 套用至排班表
+        </button>
+      </div>
+      <div class="overflow-x-auto max-h-64 border rounded-lg">
+        <table class="text-xs w-full border-collapse" id="upload-preview-table">
+          <thead>
+            <tr class="bg-gray-100 sticky top-0">
+              <th class="border px-2 py-1">日</th>
+              <th class="border px-2 py-1">VS 值班</th>
+              <th class="border px-2 py-1">CR 值班</th>
+            </tr>
+          </thead>
+          <tbody id="upload-preview-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── STEP 2: 每日值班 ─────────────────────────────────── -->
+  <section id="sec-daily" class="hidden bg-white rounded-xl shadow p-5">
+    <h2 class="font-bold text-gray-700 text-base mb-1 flex items-center">
+      <span class="step-badge">2</span>每日值班醫師
+    </h2>
+    <p class="text-xs text-gray-500 mb-3 ml-8">
+      週六日自動標記為假日（粉底）。點擊右側箭頭選人，或直接在框內打字輸入名字。
+    </p>
+    <div class="overflow-x-auto">
+      <table class="text-sm w-full border-collapse">
+        <thead>
+          <tr class="bg-gray-100">
+            <th class="border px-2 py-1.5 text-left w-10">日</th>
+            <th class="border px-2 py-1.5 text-left w-12">星期</th>
+            <th class="border px-2 py-1.5 text-center w-14">假日</th>
+            <th class="border px-2 py-1.5">VS 值班醫師</th>
+            <th class="border px-2 py-1.5">CR 值班醫師</th>
+          </tr>
+        </thead>
+        <tbody id="calendar-body"></tbody>
+      </table>
+    </div>
+
+  </section>
+
+  <!-- ── STEP 3: 平日白天班 ───────────────────────────────── -->
+  <section id="sec-rotation" class="hidden bg-white rounded-xl shadow p-5">
+    <h2 class="font-bold text-gray-700 text-base mb-1 flex items-center">
+      <span class="step-badge">3</span>平日白天班輪值名單
+    </h2>
+    <p class="text-xs text-gray-500 mb-3 ml-8">
+      可下拉選人，也可手動打字。多人輪流請用逗號分隔，例如：<code>徐麒翔,陳常胤</code>。
+    </p>
+    <div class="overflow-x-auto">
+      <table class="text-sm w-full border-collapse">
+        <thead>
+          <tr class="bg-gray-100">
+            <th class="border px-3 py-1.5 text-left w-8">班別</th>
+            <th class="border px-3 py-1.5 text-left">班別名稱</th>
+            <th class="border px-3 py-1.5 text-left">負責醫師</th>
+          </tr>
+        </thead>
+        <tbody id="rotation-body">
+          <!-- 會由 JS 動態生成 -->
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ── STEP 4: 預覽與執行 ──────────────────────────────── -->
+  <section id="sec-action" class="hidden bg-white rounded-xl shadow p-5">
+    <h2 class="font-bold text-gray-700 text-base mb-4 flex items-center">
+      <span class="step-badge">4</span>預覽 &amp; 執行
+    </h2>
+
+    <div class="mb-4 bg-blue-50 border border-blue-200 rounded-xl p-4">
+      <div class="flex items-start gap-2">
+        <span class="text-blue-500 text-lg">🖥️</span>
+        <div>
+          <p class="text-sm font-semibold text-blue-800">手動登入成大排班系統</p>
+          <p class="text-xs text-blue-600 mt-1">
+            按下「▶ 開始排班」後，請在彈出的視窗中手動登入，完成後切回本視窗按「▶ 繼續排班」。
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="flex gap-3 flex-wrap mb-4">
+      <button onclick="doPreview()"
+        class="bg-gray-600 hover:bg-gray-700 text-white px-5 py-2 rounded-lg text-sm font-semibold transition">
+        🔍 預覽排班
+      </button>
+      <button id="btn-start" onclick="doStart()"
+        class="bg-green-600 hover:bg-green-700 text-white px-5 py-2 rounded-lg text-sm font-semibold transition">
+        ▶ 開始排班
+      </button>
+      <button id="btn-continue" onclick="doContinue()"
+        class="hidden bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 rounded-lg text-sm font-semibold transition">
+        ▶ 繼續排班
+      </button>
+      <button id="btn-cancel" onclick="doCancel()"
+        class="hidden bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-semibold transition">
+        ✕ 取消
+      </button>
+    </div>
+
+    <div id="preview-area" class="hidden mb-4">
+      <h3 class="text-sm font-semibold text-gray-600 mb-2">排班預覽</h3>
+      <div id="preview-table" class="overflow-x-auto max-h-72 border rounded-lg text-xs"></div>
+    </div>
+
+    <div id="progress-area" class="hidden">
+      <h3 class="text-sm font-semibold text-gray-600 mb-2">進度記錄</h3>
+      <div id="log-box"
+        class="bg-gray-900 text-green-300 rounded-lg p-4 h-64 overflow-y-auto whitespace-pre-wrap">
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<script>
+  const WEEKDAYS = ['日','一','二','三','四','五','六'];
+  const DOCTORS_VS = ["廖瑀","陳昭佑","張獻元","陳柏偉","李文煌","劉嚴文","詹世鴻","陳則瑋","林佳淩","鄭朝允","柯呈諭","黃睦翔","黃鼎鈞"];
+  const DOCTORS_R = ["胡展瀚","徐麒翔","李見賢","陳常胤","葉建寬","陳昭佑","廖瑀","陳則瑋","鄭朝允"];
+
+  const TW_HOLIDAYS = {
+    2026: { "1/1": "開國紀念日", "2/16": "農曆除夕", "2/17": "春節初一", "2/18": "春節初二", "2/19": "春節初三", "3/2": "和平紀念日補假", "4/3": "兒童節補假", "4/6": "清明節補假", "5/1": "勞動節", "6/19": "端午節", "9/25": "中秋節", "10/12":"國慶日補假" },
+  };
+
+  // 生成「可編輯式下拉選單」的 HTML
+  function createComboHTML(id, doctorList, placeholder) {
+    let options = doctorList.map(name => `<option value="${name}">${name}</option>`).join('');
+    return `
+      <div class="combo-container">
+        <select class="combo-select" onchange="this.nextElementSibling.value=this.value">
+          <option value="">— 請選擇 —</option>
+          ${options}
+        </select>
+        <input type="text" id="${id}" class="combo-input" placeholder="${placeholder}">
+      </div>
+    `;
+  }
+
+  function generateCalendar() {
+    const year  = parseInt(document.getElementById('inp-year').value);
+    const month = parseInt(document.getElementById('inp-month').value);
+    const days  = new Date(year, month, 0).getDate();
+    const tbody = document.getElementById('calendar-body');
+    tbody.innerHTML = '';
+
+    for (let d = 1; d <= days; d++) {
+      const dt = new Date(year, month - 1, d);
+      const dow = dt.getDay();
+      const weekend = dow === 0 || dow === 6;
+      const holidayName = TW_HOLIDAYS[year]?.[`${month}/${d}`] || null;
+
+      const tr = document.createElement('tr');
+      if (weekend) tr.classList.add('day-weekend');
+      else if (holidayName) tr.classList.add('day-holiday');
+
+      tr.innerHTML = `
+        <td class="border px-2 py-1 font-mono text-center">${d}</td>
+        <td class="border px-2 py-1 text-center">${WEEKDAYS[dow]}</td>
+        <td class="border px-2 py-1 text-center leading-tight">
+          <input type="checkbox" id="hol-${d}" ${weekend || holidayName ? 'checked' : ''} onchange="toggleHolidayRow(${d}, this.checked)">
+          ${holidayName ? `<br><span class="text-xs text-amber-700 font-medium">${holidayName}</span>` : ''}
+        </td>
+        <td class="border px-1 py-0.5">${createComboHTML('vs-'+d, DOCTORS_VS, 'VS姓名')}</td>
+        <td class="border px-1 py-0.5">${createComboHTML('cr-'+d, DOCTORS_R, 'CR姓名')}</td>
+      `;
+      tbody.appendChild(tr);
+    }
+
+    // 生成白天班輪值名單表格
+    const rBody = document.getElementById('rotation-body');
+    const shifts = [
+      {seq: '3', name: '科外白天照會VS', list: DOCTORS_VS, id: 'waizhao_vs_list'},
+      {seq: '4', name: '科外白天照會R', list: DOCTORS_R, id: 'waizhao_r_list'},
+      {seq: '5', name: '科內白天照會VS', list: DOCTORS_VS, id: 'neizhao_vs_list'},
+      {seq: '6', name: '科內白班照會R', list: DOCTORS_R, id: 'neizhao_r_list'},
+      {seq: '7', name: 'ICU白天照會VS', list: DOCTORS_VS, id: 'icu_vs_list'},
+      {seq: '8', name: 'ICU白班照會R', list: DOCTORS_R, id: 'icu_r_list'},
+      {seq: '10+13', name: '急診白天照會R<br><span class="text-xs text-gray-400">+ CCU白天控床CR</span>', list: DOCTORS_R, id: 'jiuzhen_r_list'},
+    ];
+    rBody.innerHTML = shifts.map((s, idx) => `
+      <tr class="${idx % 2 === 1 ? 'bg-gray-50' : ''}">
+        <td class="border px-3 py-1.5 text-center font-mono">${s.seq}</td>
+        <td class="border px-3 py-1.5">${s.name}</td>
+        <td class="border px-2 py-1">${createComboHTML(s.id, s.list, '輸入或選擇...')}</td>
+      </tr>
+    `).join('');
+
+    document.getElementById('sec-upload').classList.remove('hidden');
+    document.getElementById('sec-daily').classList.remove('hidden');
+    document.getElementById('sec-rotation').classList.remove('hidden');
+    document.getElementById('sec-action').classList.remove('hidden');
+  }
+
+  function toggleHolidayRow(day, isHol) {
+    const row = document.getElementById(`hol-${day}`).closest('tr');
+    row.classList.remove('day-weekend', 'day-holiday');
+    if (isHol) {
+      const year = parseInt(document.getElementById('inp-year').value);
+      const month = parseInt(document.getElementById('inp-month').value);
+      const dt = new Date(year, month - 1, day);
+      row.classList.add(dt.getDay() === 0 || dt.getDay() === 6 ? 'day-weekend' : 'day-holiday');
+    }
+  }
+
+  function collectConfig() {
+    const year = parseInt(document.getElementById('inp-year').value);
+    const month = parseInt(document.getElementById('inp-month').value);
+    const days = new Date(year, month, 0).getDate();
+    const vs_sch = {}, cr_sch = {}, holidays = [];
+
+    for (let d = 1; d <= days; d++) {
+      const vsVal = document.getElementById('vs-'+d)?.value?.trim();
+      const crVal = document.getElementById('cr-'+d)?.value?.trim();
+      if (vsVal) vs_sch[d] = vsVal;
+      if (cr_sch) cr_sch[d] = crVal;
+      if (document.getElementById('hol-'+d)?.checked) {
+        holidays.push(`${year}-${String(month).padStart(2,'0')}-${String(d).padStart(2,'0')}`);
+      }
+    }
+    const parseList = id => (document.getElementById(id)?.value?.trim() || '').split(',').map(s => s.trim()).filter(Boolean);
+    return {
+      year, month, schedule_month: `${year}-${String(month).padStart(2,'0')}`,
+      vs_schedule: vs_sch, cr_schedule: cr_sch, tw_holidays: holidays,
+      waizhao_vs_list: parseList('waizhao_vs_list'), waizhao_r_list: parseList('waizhao_r_list'),
+      neizhao_vs_list: parseList('neizhao_vs_list'), neizhao_r_list: parseList('neizhao_r_list'),
+      icu_vs_list:     parseList('icu_vs_list'),     icu_r_list:      parseList('icu_r_list'),
+      jiuzhen_r_list:  parseList('jiuzhen_r_list')
+    };
+  }
+
+  let _parsedVS = {}, _parsedCR = {};
+  async function doUpload() {
+    const fileInput = document.getElementById('upload-file');
+    if (!fileInput.files.length) { alert('請選擇 Excel'); return; }
+    const form = new FormData(); form.append('file', fileInput.files[0]);
+    const btn = event.target; btn.textContent = '解析中...'; btn.disabled = true;
+    try {
+      const res = await fetch('/keyin/api/upload-schedule', { method: 'POST', body: form });
+      const data = await res.json();
+      if (!data.ok) { alert(data.error); return; }
+      _parsedVS = data.vs_schedule || {}; _parsedCR = data.cr_schedule || {};
+      const days = new Set([...Object.keys(_parsedVS), ...Object.keys(_parsedCR)].map(Number).sort((a,b)=>a-b));
+      document.getElementById('upload-preview-body').innerHTML = Array.from(days).map(d => `
+        <tr><td class="border px-2 py-1 text-center">${d}</td><td class="border px-2 py-1">${_parsedVS[d]||''}</td><td class="border px-2 py-1">${_parsedCR[d]||''}</td></tr>
+      `).join('');
+      document.getElementById('upload-summary').textContent = `格式：${data.format} ｜ VS ${Object.keys(_parsedVS).length} 天 ｜ CR ${Object.keys(_parsedCR).length} 天`;
+      document.getElementById('upload-result').classList.remove('hidden');
+    } finally { btn.textContent = '解析排班表'; btn.disabled = false; }
+  }
+
+  function applyParsedSchedule() {
+    const days = new Date(parseInt(document.getElementById('inp-year').value), parseInt(document.getElementById('inp-month').value), 0).getDate();
+    for (let d = 1; d <= days; d++) {
+      if (_parsedVS[d]) document.getElementById('vs-'+d).value = _parsedVS[d];
+      if (_parsedCR[d]) document.getElementById('cr-'+d).value = _parsedCR[d];
+    }
+    alert('已套用！');
+  }
+
+  async function doPreview() {
+    const res = await fetch('/keyin/api/preview', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(collectConfig()) });
+    const data = await res.json();
+    if (!data.ok) { alert(data.error); return; }
+    let html = `<table class="w-full border-collapse text-xs"><thead><tr class="bg-gray-100"><th class="border px-2 py-1">日期</th><th class="border px-2 py-1">醫師</th><th class="border px-2 py-1">班別</th></tr></thead><tbody>`;
+    data.preview.forEach(item => { html += `<tr><td class="border px-2 py-1">${item.day}</td><td class="border px-2 py-1">${item.doctor}</td><td class="border px-2 py-1">${item.shift}</td></tr>`; });
+    html += `</tbody></table>`;
+    document.getElementById('preview-table').innerHTML = html;
+    document.getElementById('preview-area').classList.remove('hidden');
+  }
+
+  async function doStart() {
+    if (!confirm('開始自動排班？')) return;
+    const res = await fetch('/keyin/api/start', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(collectConfig()) });
+    const data = await res.json();
+    if (data.ok) { document.getElementById('progress-area').classList.remove('hidden'); document.getElementById('log-box').textContent = ''; }
+  }
+  async function doContinue() { await fetch('/keyin/api/continue', {method:'POST'}); }
+  async function doCancel() { if (confirm('取消？')) await fetch('/keyin/api/cancel', {method:'POST'}); }
+
+  let ws;
+  function connectWS() {
+    ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/keyin/ws`);
+    ws.onmessage = (ev) => {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === 'status') updateState(msg.state);
+      if (msg.type === 'log') { const b = document.getElementById('log-box'); b.textContent += msg.text + '\n'; b.scrollTop = b.scrollHeight; }
+    };
+    ws.onclose = () => setTimeout(connectWS, 5000);
+  }
+  function updateState(state) {
+    ['banner-waiting','banner-running','banner-done','banner-error'].forEach(id => document.getElementById(id).classList.add('hidden'));
+    document.getElementById('btn-continue').classList.toggle('hidden', state !== 'waiting_login');
+    document.getElementById('btn-cancel').classList.toggle('hidden', !['waiting_login','running'].includes(state));
+    document.getElementById('btn-start').disabled = ['waiting_login','running'].includes(state);
+    if (state !== 'idle') document.getElementById('banner-'+state.replace('waiting_login','waiting'))?.classList.remove('hidden');
+  }
+
+  // Pull prefill payload pushed by the 排班 step's "下一步：到 key 班" button,
+  // hydrate year/month and the per-day VS/CR + holiday inputs, then leave the
+  // user to fill the white-day rotation lists before previewing.
+  async function loadPrefill() {
+    try {
+      const res = await fetch('/keyin/api/prefill');
+      if (!res.ok) return false;
+      const data = await res.json();
+      if (!data.ok || !data.prefill) return false;
+      const p = data.prefill;
+      document.getElementById('inp-year').value = p.year;
+      document.getElementById('inp-month').value = String(p.month);
+      generateCalendar();
+      const days = new Date(p.year, p.month, 0).getDate();
+      const holSet = new Set(p.tw_holidays || []);
+      for (let d = 1; d <= days; d++) {
+        const ds = `${p.year}-${String(p.month).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+        const cb = document.getElementById('hol-'+d);
+        if (cb) {
+          const dt = new Date(p.year, p.month - 1, d);
+          const weekend = dt.getDay() === 0 || dt.getDay() === 6;
+          cb.checked = holSet.has(ds) || weekend;
+          toggleHolidayRow(d, cb.checked);
+        }
+        const vs = (p.vs_schedule || {})[d] || (p.vs_schedule || {})[String(d)];
+        const cr = (p.cr_schedule || {})[d] || (p.cr_schedule || {})[String(d)];
+        if (vs) document.getElementById('vs-'+d).value = vs;
+        if (cr) document.getElementById('cr-'+d).value = cr;
+      }
+      const banner = document.createElement('div');
+      banner.className = 'bg-emerald-100 border border-emerald-300 text-emerald-800 text-sm rounded-lg px-4 py-2 mb-3';
+      banner.textContent = `已從排班結果帶入 ${p.year}/${String(p.month).padStart(2,'0')}：VS ${Object.keys(p.vs_schedule||{}).length} 天、CR ${Object.keys(p.cr_schedule||{}).length} 天 — 請補完平日白天班輪值名單後預覽`;
+      document.querySelector('main').prepend(banner);
+      return true;
+    } catch { return false; }
+  }
+
+  window.addEventListener('load', async () => {
+    connectWS();
+    fetch('/keyin/api/status').then(r => r.json()).then(d => updateState(d.state));
+    await loadPrefill();
+  });
+</script>
+<!-- Footer Credit -->
+<div class="fixed bottom-2 right-4 text-[10px] text-gray-400 pointer-events-none select-none">
+  應用程式由 114級 CV 陳常胤醫師 與 Claude code 及 Gemini CLI 合作開發
+</div>
+</body>
+</html>

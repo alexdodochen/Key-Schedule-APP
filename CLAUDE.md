@@ -5,11 +5,14 @@ Guidance for Claude Code when working in this repository.
 ## Project purpose
 
 **CV_APP** — desktop app integrating the cardiology monthly call-schedule
-workflow into a single login-protected UI. Phase 1 covers the **排班 path**
-(generates the monthly schedule using a backtracking solver and writes it
-to Google Sheets). Phase 2 will add a **key 班 path** that takes the solved
-schedule and keys it into the NCKUH EDR system via Playwright (planned to
-share auth + state with `Key-In-The-CVSchedule`).
+workflow into a single login-protected UI.
+- Phase 1: **排班 path** — generates the monthly schedule using a backtracking
+  solver and writes it to Google Sheets.
+- Phase 2: **key 班 path** — vendored from `Key-In-The-CVSchedule`, mounted
+  at `/keyin`. Drives the NCKUH EDR system via Playwright. The post-solve
+  panel of the 排班 step has a "下一步：到 key 班" button that posts the
+  cached schedule into `keyin_routes.prefill_cache` then redirects to
+  `/keyin`, where the form auto-hydrates.
 
 The original schedule generator lives at `C:\Users\dr\Downloads\Y\排班\`
 (scripts + Google-Sheets I/O). CV_APP wraps the same `gsheet_io.py` and
@@ -34,7 +37,8 @@ called from a FastAPI endpoint.
 
 Runtime deps in `requirements.txt`: `fastapi`, `uvicorn`, `jinja2`,
 `python-multipart`, `bcrypt`, `python-jose`, `PyQt5`, `PyQtWebEngine`,
-`gspread`, `google-auth`. **Phase 2 will add** `playwright` for keyin.
+`gspread`, `google-auth`, `playwright` (`python -m playwright install chromium`
+once after pip install), `openpyxl`, `xlrd`.
 
 ## Architecture
 
@@ -46,7 +50,19 @@ QWebEngineProfile cookie store is wiped on launch to force re-login.
 
 ### Request flow (`app.py`)
 
-Cookie-based JWT auth — same scheme as `Key-In-The-CVSchedule`:
+**Login is currently bypassed.** Both `app.py:_get_user` and
+`keyin_routes.py:_get_user` are hard-coded to return `TokenData("local",
+"admin")` — every request is treated as the synthetic local admin. `/login`
+GET redirects to `/`, `/logout` redirects to `/`, the websocket skips token
+verification, and the home/sched/keyin templates have had their 登出 / 後台 /
+Admin badge UI elements removed. To restore login, revert the two
+`_get_user` helpers to their cookie/JWT versions, restore `/login` and
+`/logout` handlers, and re-add the UI buttons. `auth.py` / `audit.py` and
+the `register_user` / `approve_user` endpoints are still in the codebase
+but are no longer reachable through the UI.
+
+Original design (preserved for reference) — cookie-based JWT auth, same
+scheme as `Key-In-The-CVSchedule`:
 - `auth.py` (copied verbatim) → bcrypt + HS256 JWT signed by `.secret_key`.
 - `audit.py` (copied verbatim) → JSONL append-only log; every meaningful
   endpoint calls `audit.log(...)`.
@@ -64,6 +80,26 @@ Routes:
   preview (calendar + stats + QOD violations + targets)
 - `POST /api/sched/write` — write cached schedule to Google Sheet (calendar
   tab + monthly stats tab + cumulative stats tab)
+- `POST /api/sched/handoff-to-keyin` — bridge to Phase 2: splits the cached
+  schedule into `vs_schedule` / `cr_schedule` by doctor pool, attaches
+  `tw_holidays` for the month, stashes into `keyin_routes.prefill_cache`,
+  returns `{ok, redirect:"/keyin"}`. The cv_solver `_solve_cache` is the
+  source of truth — call only after `/api/sched/solve` has run.
+
+`keyin_routes.py` mounts under `/keyin` via `app.include_router(...,
+prefix="/keyin")`. Endpoints (mirror upstream `Key-In-The-CVSchedule`):
+- `GET /keyin` — `keyin_index.html` (5-section form)
+- `GET /keyin/api/prefill` — one-shot pop of the prefill payload
+- `POST /keyin/api/upload-schedule` — Excel parse (`keyin_excel_parser`)
+- `POST /keyin/api/preview` — build the day-by-day shift list
+- `POST /keyin/api/start | continue | cancel`
+- `GET /keyin/api/status`
+- `WS /keyin/ws`
+
+Login/register/admin live in `app.py` and are shared — `keyin_routes.py`
+does not redefine them. `auth.py` and `audit.py` were verified
+byte-identical to the keyin upstream copies; `keyin_routes.py` imports
+them directly.
 
 ### Solver (`cv_solver.py`)
 
@@ -126,19 +162,29 @@ lists from server-rendered Jinja variables (`doctors_cr`, `doctors_vs`,
 `gsheet_io.load_cumulative_stats` will return `{}` for any name not in
 the 值班總數統計 sheet. The UI surfaces this as a baseline warning.
 
-## Phase 2 plan (not yet implemented)
+## Phase 2 implementation notes
 
-When integrating `Key-In-The-CVSchedule`:
-1. Vendor in (or git-submodule) the keyin repo at `keyin/` and rewire its
-   `app.py` routes under a `/keyin` prefix in `app.py` here.
-2. Reuse `cv_solver` output to populate `vs_schedule` / `cr_schedule` for
-   the keyin scheduler — VS_LIST → `vs_schedule`, CRS + INTER_MID →
-   `cr_schedule`.
-3. Re-enable the key 班 card in `home.html`.
-4. Add a "下一步：到 key 班" button on the post-solve panel that posts the
-   cached schedule into the keyin session and redirects to `/keyin`.
+- The `keyin_scheduler.SchedulerSession` keeps **one** session at module
+  scope in `keyin_routes.py` (mirrors upstream); a second `/keyin/api/start`
+  while a session is in `starting` / `waiting_login` / `running` is rejected
+  rather than queued. Do not change this without redesigning `manager` /
+  `session` to be keyed.
+- The Playwright runner imports `playwright.async_api` lazily inside
+  `_run` — uvicorn boots fine without playwright installed; the import
+  fails only when a user clicks ▶ 開始排班.
+- `keyin_routes.prefill_cache[username]` is one-shot: `GET /keyin/api/prefill`
+  pops it. Refreshing the keyin page after consuming the prefill returns
+  an empty form, which is intentional — the user has already hydrated.
+- When the doctor roster changes, update `cv_solver.CRS / VS_LIST /
+  INTER_MID`. The keyin form's `DOCTORS_VS` / `DOCTORS_R` constants in
+  `templates/keyin_index.html` are independent (line ~270 area) — they
+  populate the autocomplete combos for the white-day rotation lists. They
+  do not need to match `cv_solver` exactly (white-day rotations include
+  doctors outside the night-shift pool), but if you add a new CR/VS who
+  may take night shifts via the solver, also add them to the keyin combos.
 
-Soft contract for the schedule handoff:
+Schedule handoff payload (frozen contract — see
+`/api/sched/handoff-to-keyin` and `loadPrefill()` in `keyin_index.html`):
 ```python
 {
     "year": int, "month": int,
@@ -158,7 +204,15 @@ Soft contract for the schedule handoff:
 - **Do not commit `.gsa.json`, `users.json`, `.secret_key`,
   `audit_log.jsonl`** — all gitignored. Service-account credentials and
   bcrypt hashes never go to remote.
-- **Do not re-run a month after `update_cumulative_stats` has applied
-  it** — the cumulative tab would double-count this month into its own
-  baseline. To re-run, manually subtract the month's contribution first
-  or use the parent project's `rebuild_stats.py`.
+- Re-running a month is **safe** — `/api/sched/write` reads the existing
+  `{YYYYMM} 班數統計` tab via `gsheet_io.read_monthly_stats` to recover the
+  previous run's per-doctor contribution, subtracts it from the cumulative
+  baseline, then adds the fresh `monthly_stats_map`. The 班數統計 tab and
+  the 值班總數統計 tab are written in the same `/api/sched/write` call, so
+  the two are always consistent; cross-machine coordination needs nothing
+  extra because both clients read/write the same Google Sheet.
+- A human-readable JSON copy of every successful write is dropped into
+  `schedule_history/{YYYYMM}.json` for traceability — **not** consulted by
+  the subtract logic, so it can drift without affecting cumulative
+  correctness. `git commit && git push` it manually if you want a versioned
+  history outside the Sheet.

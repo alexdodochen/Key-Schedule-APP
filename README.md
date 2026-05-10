@@ -2,15 +2,16 @@
 
 Desktop app that wraps the 心臟內科 monthly call-schedule workflow in a single login-protected UI.
 
-## Status (Phase 1)
+## Status
 
-- ✅ 排班 path — interactive 5-step solver UI (cv_solver) → writes to Google Sheets
-- ⏳ key 班 path — placeholder; integration with `Key-In-The-CVSchedule` planned for Phase 2
+- ✅ Phase 1 — 排班 path: interactive 5-step solver UI (`cv_solver`) → writes to Google Sheets
+- ✅ Phase 2 — key 班 path: vendored from `Key-In-The-CVSchedule`. Mounted at `/keyin`. The post-solve panel hands the schedule directly into the keyin form via `POST /api/sched/handoff-to-keyin`; the keyin page also still accepts standalone Excel uploads.
 
 ## Run (dev)
 
 ```powershell
 pip install -r requirements.txt
+python -m playwright install chromium   # one-time, for /keyin
 python main.py
 ```
 
@@ -35,7 +36,10 @@ uvicorn app:app --host 127.0.0.1 --port 8765
 - **`audit.py`** — append-only JSONL action log.
 - **`cv_solver.py`** — pure backtracking solver (no I/O). Inputs: `year, month, X, fixed, avoid, baseline`. Outputs: `(schedule_dict, stats_rows)`.
 - **`gsheet_io.py`** — Google Sheets I/O (calendar grid + monthly stats + cumulative). Single source of truth for `TAIWAN_HOLIDAYS`.
-- **`templates/`** — Jinja2 HTML.
+- **`keyin_routes.py`** — APIRouter mounted at `/keyin`; carries the Phase 2 endpoints (Excel upload, preview, start/continue/cancel, status, ws). Reuses `auth.py` / `audit.py`.
+- **`keyin_scheduler.py`** — Playwright session that drives the NCKUH EDR shift cells (vendored verbatim from `Key-In-The-CVSchedule`).
+- **`keyin_excel_parser.py`** — heuristic vertical/horizontal Excel parser (vendored verbatim).
+- **`templates/`** — Jinja2 HTML (`keyin_index.html` is the Phase 2 form).
 - **`static/`** — CSS/JS assets.
 
 ## Scheduling rules (summary)

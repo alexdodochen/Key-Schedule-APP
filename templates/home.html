@@ -12,22 +12,15 @@
   <div class="flex items-center gap-2">
     <span class="text-xl">🏥</span>
     <span class="font-bold text-lg">心臟內科 CV_APP</span>
-    {% if is_admin %}
-    <span class="ml-2 text-xs bg-white/20 px-2 py-0.5 rounded-full">Admin</span>
-    {% endif %}
   </div>
   <div class="flex items-center gap-3 text-sm">
-    <span class="opacity-80">{{ username }}</span>
-    {% if is_admin %}
-    <a href="/admin" class="bg-white/20 hover:bg-white/30 px-3 py-1 rounded-full transition">後台</a>
-    {% endif %}
-    <a href="/logout" class="bg-white/20 hover:bg-white/30 px-3 py-1 rounded-full transition">登出</a>
+    <span class="opacity-80">本機使用</span>
   </div>
 </header>
 
 <main class="max-w-5xl mx-auto px-4 py-12">
   <h1 class="text-2xl font-bold text-gray-800 mb-2">請選擇要進入的功能</h1>
-  <p class="text-gray-500 mb-10">排班完成後可一鍵把資料帶入 key 班（Phase 2 開放）</p>
+  <p class="text-gray-500 mb-10">排班完成後可一鍵把資料帶入 key 班</p>
 
   <div class="grid md:grid-cols-2 gap-6">
     <a href="/sched"
@@ -46,18 +39,21 @@
       </div>
     </a>
 
-    <div class="block bg-gray-100 rounded-2xl p-8 border-2 border-dashed border-gray-300 cursor-not-allowed select-none opacity-70">
-      <div class="text-5xl mb-4 grayscale">⌨️</div>
-      <h2 class="text-xl font-bold text-gray-500 mb-2">key 班</h2>
-      <p class="text-sm text-gray-400 leading-relaxed">
-        把產出的班表 key 進醫院 EDR 系統 — Phase 2 整合
-        <code class="bg-gray-200 px-1 rounded text-xs">Key-In-The-CVSchedule</code>
-        後啟用。
+    <a href="/keyin"
+       class="block bg-white rounded-2xl shadow hover:shadow-lg transition p-8 border-2 border-transparent hover:border-indigo-400 group">
+      <div class="text-5xl mb-4 group-hover:scale-110 transition">⌨️</div>
+      <h2 class="text-xl font-bold text-gray-800 mb-2">key 班</h2>
+      <p class="text-sm text-gray-500 leading-relaxed">
+        把產出的班表 key 進醫院 EDR 系統 — Playwright 自動點選每一格班別。
+        排班完成後可一鍵帶入；也支援獨立上傳 Excel。
       </p>
-      <div class="mt-5 inline-flex items-center bg-gray-200 text-gray-500 text-xs font-semibold px-3 py-1 rounded-full">
-        即將推出
+      <div class="mt-5 inline-flex items-center text-indigo-600 text-sm font-semibold">
+        進入 key 班
+        <svg class="w-4 h-4 ml-1 group-hover:translate-x-1 transition" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+        </svg>
       </div>
-    </div>
+    </a>
   </div>
 
   <div class="mt-12 bg-white rounded-xl shadow p-6 text-sm text-gray-600">
