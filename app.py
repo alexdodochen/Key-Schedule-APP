@@ -36,6 +36,8 @@ import keyin_routes
 BASE_DIR = Path(__file__).parent
 HISTORY_DIR = BASE_DIR / "schedule_history"
 HISTORY_DIR.mkdir(exist_ok=True)
+DRAFTS_DIR = BASE_DIR / "sched_drafts"
+DRAFTS_DIR.mkdir(exist_ok=True)
 app = FastAPI(title="CV_APP — 心臟內科排班整合")
 app.include_router(keyin_routes.router, prefix="/keyin")
 
@@ -499,3 +501,87 @@ async def api_sched_write(request: Request):
         "history_file": str(history_path.relative_to(BASE_DIR)).replace("\\", "/"),
         "rewrite": bool(previous_monthly),
     })
+
+
+# ── Draft save / load (mid-workflow resume points, local-only) ──────
+@app.post("/api/sched/save-draft")
+async def api_sched_save_draft(request: Request):
+    user = _get_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "未登入"}, status_code=401)
+    body = await request.json()
+    state_blob = body.get("state") or {}
+    year = state_blob.get("year")
+    month = state_blob.get("month")
+    if not year or not month:
+        return JSONResponse({"ok": False, "error": "state 缺 year/month"})
+    name = body.get("name") or f"{int(year)}{int(month):02d}"
+    safe = "".join(c for c in str(name) if c.isalnum() or c in "_-")
+    if not safe:
+        return JSONResponse({"ok": False, "error": "草稿名稱不合法"})
+    payload = {
+        "saved_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+        "saved_by": user.username,
+        "step": int(body.get("step", 1)),
+        "state": state_blob,
+    }
+    path = DRAFTS_DIR / f"{safe}.json"
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    audit.log("sched_save_draft", user=user.username, ip=_client_ip(request), detail=safe)
+    return JSONResponse({"ok": True, "name": safe, "saved_at": payload["saved_at"]})
+
+
+@app.get("/api/sched/list-drafts")
+async def api_sched_list_drafts(request: Request):
+    user = _get_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "未登入"}, status_code=401)
+    items = []
+    for f in sorted(DRAFTS_DIR.glob("*.json")):
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        s = d.get("state") or {}
+        items.append({
+            "name": f.stem,
+            "saved_at": d.get("saved_at", ""),
+            "saved_by": d.get("saved_by", ""),
+            "step": d.get("step"),
+            "year": s.get("year"),
+            "month": s.get("month"),
+        })
+    items.sort(key=lambda x: x["saved_at"], reverse=True)
+    return JSONResponse({"ok": True, "drafts": items})
+
+
+@app.post("/api/sched/load-draft")
+async def api_sched_load_draft(request: Request):
+    user = _get_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "未登入"}, status_code=401)
+    body = await request.json()
+    name = "".join(c for c in str(body.get("name", "")) if c.isalnum() or c in "_-")
+    if not name:
+        return JSONResponse({"ok": False, "error": "缺 name"})
+    path = DRAFTS_DIR / f"{name}.json"
+    if not path.exists():
+        return JSONResponse({"ok": False, "error": "草稿不存在"})
+    audit.log("sched_load_draft", user=user.username, ip=_client_ip(request), detail=name)
+    return JSONResponse({"ok": True, "draft": json.loads(path.read_text(encoding="utf-8"))})
+
+
+@app.post("/api/sched/delete-draft")
+async def api_sched_delete_draft(request: Request):
+    user = _get_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "未登入"}, status_code=401)
+    body = await request.json()
+    name = "".join(c for c in str(body.get("name", "")) if c.isalnum() or c in "_-")
+    if not name:
+        return JSONResponse({"ok": False, "error": "缺 name"})
+    path = DRAFTS_DIR / f"{name}.json"
+    if path.exists():
+        path.unlink()
+    audit.log("sched_delete_draft", user=user.username, ip=_client_ip(request), detail=name)
+    return JSONResponse({"ok": True})

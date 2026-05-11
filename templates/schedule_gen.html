@@ -48,6 +48,24 @@
 
 <main class="max-w-6xl mx-auto px-4 py-6 space-y-6">
 
+  <!-- ── 草稿列：任一步都能存 / 讀 / 刪 ────────────────────────── -->
+  <section id="draft-bar" class="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-center flex-wrap gap-2 text-sm">
+    <span class="font-semibold text-amber-800">💾 草稿（本機）</span>
+    <button id="btn-save-draft" type="button"
+      class="bg-amber-600 hover:bg-amber-700 text-white px-3 py-1 rounded text-xs font-semibold">
+      存目前進度
+    </button>
+    <button id="btn-load-draft" type="button"
+      class="bg-white border border-amber-400 text-amber-700 hover:bg-amber-100 px-3 py-1 rounded text-xs font-semibold">
+      讀草稿
+    </button>
+    <button id="btn-delete-draft" type="button"
+      class="bg-white border border-red-400 text-red-700 hover:bg-red-50 px-3 py-1 rounded text-xs font-semibold">
+      刪草稿
+    </button>
+    <span id="draft-status" class="text-xs text-gray-500 ml-auto"></span>
+  </section>
+
   <!-- ── Step 1 — 選月份 ────────────────────────────────────────── -->
   <section id="step1" class="bg-white rounded-xl shadow border-2 step-active p-6">
     <div class="flex items-center justify-between mb-4">
@@ -156,12 +174,22 @@
         </table>
       </div>
       <div>
-        <h3 class="font-semibold text-gray-700 mb-2">CR 平衡 target（依累計分配）</h3>
+        <h3 class="font-semibold text-gray-700 mb-2">CR 預估值班總數（扣除 VS / 展瀚 / 建寬 後）</h3>
+        <div id="cr-summary" class="bg-indigo-50 border border-indigo-200 rounded-lg p-3 mb-3 text-xs text-gray-600">—</div>
+        <table class="w-full border border-gray-200 rounded-lg overflow-hidden mb-3">
+          <thead class="bg-gray-100"><tr>
+            <th class="px-3 py-2 text-left">姓名</th>
+            <th class="px-3 py-2">假日</th><th class="px-3 py-2">平日</th><th class="px-3 py-2">合計</th>
+          </tr></thead>
+          <tbody id="cr-projected-table"></tbody>
+        </table>
+
+        <h3 class="font-semibold text-gray-700 mb-2">CR 平衡 target（依累計分配，solve 後填入）</h3>
         <table class="w-full border border-gray-200 rounded-lg overflow-hidden">
           <thead class="bg-gray-100"><tr>
-            <th class="px-3 py-2 text-left">姓名</th><th class="px-3 py-2">週五</th><th class="px-3 py-2">週六</th><th class="px-3 py-2">週日</th>
+            <th class="px-3 py-2 text-left">姓名</th><th class="px-3 py-2">週五</th><th class="px-3 py-2">週六</th><th class="px-3 py-2">週日</th><th class="px-3 py-2">假日總</th>
           </tr></thead>
-          <tbody id="cr-target-table"><tr><td colspan="4" class="text-center text-gray-400 py-2 text-xs">由 solver 決定</td></tr></tbody>
+          <tbody id="cr-target-table"><tr><td colspan="5" class="text-center text-gray-400 py-2 text-xs">由 solver 決定</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -249,6 +277,7 @@ const DOCTORS_MID = {{ doctors_mid | tojson }};
 // ── Application state ─────────────────────────────────────────────
 const state = {
   year: null, month: null,
+  prevYear: null, prevMonth: null,
   calendar: [],   // [{date, day, weekday, is_holiday, stat_type}, ...]
   baseline: {},
   prevTail: {},   // {dateStr: name} — last 2 days of previous month for cross-month rules
@@ -258,6 +287,7 @@ const state = {
   prefs: {},      // {doctorName: Set<dateStr>} for VS/展瀚/建寬: prefer; for CR: avoid
   lastSolve: null,
 };
+let _currentStep = 1;
 
 const WEEK_LABELS = ['一','二','三','四','五','六','日'];
 
@@ -272,6 +302,7 @@ function addDays(dateStr, n) {
 }
 
 function showStep(n) {
+  _currentStep = n;
   for (let i = 1; i <= 5; i++) {
     const sec = $(`step${i}`);
     if (i <= n) sec.classList.remove('hidden');
@@ -311,6 +342,7 @@ $('btn-init').addEventListener('click', async () => {
     setStatus('init-status', data.error || '載入失敗', 'err'); return;
   }
   state.year = data.year; state.month = data.month;
+  state.prevYear = data.prev_year; state.prevMonth = data.prev_month;
   state.calendar = data.calendar; state.baseline = data.baseline;
   state.prevTail = data.prev_tail || {};
   state.H = data.H; state.W = data.W;
@@ -485,6 +517,28 @@ function renderTargets(t) {
     `<td class="px-3 py-2 text-center">0</td>` +
     `<td class="px-3 py-2 text-center">${jk}</td>` +
     `<td class="px-3 py-2 text-center font-bold">${jk}</td></tr>`;
+
+  // CR 預估值班總數
+  const crH = t.cr_holiday_total ?? 0;
+  const crW = t.cr_weekday_total ?? 0;
+  const crTotal = t.cr_total ?? 0;
+  const avg = (t.cr_per_avg ?? 0).toFixed(2);
+  $('cr-summary').innerHTML =
+    `本月共 <b>${state.H}</b> 假 + <b>${state.W}</b> 平 = <b>${state.H + state.W}</b> 天<br>` +
+    `VS 支援 <b>${t.vs_holiday_total}</b> 假 + <b>${t.vs_weekday_total}</b> 平；` +
+    `展瀚 <b>${state.X}</b> 平；建寬 <b>${jk}</b> 平<br>` +
+    `→ CR 三人合計需值 <b class="text-indigo-700">${crTotal}</b> 班（假 ${crH} + 平 ${crW}），平均每人約 <b>${avg}</b> 班`;
+
+  let crRows = '';
+  const cpd = t.cr_per_doctor || {};
+  DOCTORS_CR.forEach(n => {
+    const v = cpd[n] || {holiday: 0, weekday: 0, total: 0};
+    crRows += `<tr class="border-t border-gray-200"><td class="px-3 py-2 font-medium">${n}</td>` +
+              `<td class="px-3 py-2 text-center text-amber-700 font-semibold">${v.holiday}</td>` +
+              `<td class="px-3 py-2 text-center">${v.weekday}</td>` +
+              `<td class="px-3 py-2 text-center font-bold text-indigo-700">${v.total}</td></tr>`;
+  });
+  $('cr-projected-table').innerHTML = crRows;
 }
 
 // ── Step 4: build preference picker ─────────────────────────────────
@@ -619,10 +673,12 @@ function renderResult(data) {
   const targets = data.targets;
   let html = '';
   DOCTORS_CR.forEach(n => {
+    const ht = targets.cr_holiday_target ? (targets.cr_holiday_target[n] ?? 0) : 0;
     html += `<tr class="border-t border-gray-200"><td class="px-3 py-2 font-medium">${n}</td>` +
             `<td class="px-3 py-2 text-center">${targets.cr_fri_target[n] ?? 0}</td>` +
             `<td class="px-3 py-2 text-center">${targets.cr_sat_target[n] ?? 0}</td>` +
-            `<td class="px-3 py-2 text-center">${targets.cr_sun_target[n] ?? 0}</td></tr>`;
+            `<td class="px-3 py-2 text-center">${targets.cr_sun_target[n] ?? 0}</td>` +
+            `<td class="px-3 py-2 text-center font-bold text-amber-700">${ht}</td></tr>`;
   });
   $('cr-target-table').innerHTML = html;
 
@@ -709,12 +765,140 @@ $('btn-resolve').addEventListener('click', () => {
   $('result-cal').innerHTML = '';
   $('result-stats').innerHTML = '';
   $('cr-target-table').innerHTML =
-    '<tr><td colspan="4" class="text-center text-gray-400 py-2 text-xs">由 solver 決定</td></tr>';
+    '<tr><td colspan="5" class="text-center text-gray-400 py-2 text-xs">由 solver 決定</td></tr>';
   $('qod-warn').classList.add('hidden');
   setStatus('write-status', '');
   setStatus('solve-status', '清除舊班表，重新生成中…');
   document.getElementById('btn-solve').click();
 });
+
+// ── 草稿存 / 讀 / 刪 ──────────────────────────────────────────────
+function setDraftStatus(text, kind) {
+  const el = $('draft-status');
+  el.textContent = text;
+  el.className = 'text-xs ml-auto';
+  if (kind === 'ok') el.classList.add('text-emerald-700');
+  else if (kind === 'err') el.classList.add('text-red-700');
+  else el.classList.add('text-gray-500');
+}
+
+function serializeState() {
+  const prefs = {};
+  for (const k in state.prefs) prefs[k] = Array.from(state.prefs[k]);
+  return {
+    year: state.year, month: state.month,
+    prevYear: state.prevYear, prevMonth: state.prevMonth,
+    calendar: state.calendar,
+    baseline: state.baseline,
+    prevTail: state.prevTail,
+    H: state.H, W: state.W,
+    X: state.X,
+    targets: state.targets,
+    prefs,
+    lastSolve: state.lastSolve,
+  };
+}
+
+async function saveDraft() {
+  if (!state.year || !state.month) {
+    setDraftStatus('還沒載入月份，沒東西可存', 'err'); return;
+  }
+  const defaultName = `${state.year}${pad2(state.month)}`;
+  const name = prompt('草稿名稱（預設 = 月份）：', defaultName);
+  if (name == null) return;
+  const data = await postJSON('/api/sched/save-draft', {
+    name: name || defaultName,
+    step: _currentStep,
+    state: serializeState(),
+  });
+  if (!data.ok) { setDraftStatus(`❌ 存失敗：${data.error}`, 'err'); return; }
+  setDraftStatus(`✓ 已存：${data.name}（step ${_currentStep} @ ${data.saved_at}）`, 'ok');
+}
+
+async function pickDraft(verb) {
+  const res = await fetch('/api/sched/list-drafts');
+  const list = await res.json();
+  if (!list.ok || list.drafts.length === 0) {
+    setDraftStatus('沒有草稿', 'err'); return null;
+  }
+  const lines = list.drafts.map((d, i) =>
+    `${i + 1}. ${d.name}  ｜ step ${d.step}  ｜ ${d.saved_at}`);
+  const pick = prompt(`${verb}哪個草稿？輸入編號：\n\n${lines.join('\n')}`);
+  if (!pick) return null;
+  const idx = parseInt(pick, 10) - 1;
+  if (Number.isNaN(idx) || !list.drafts[idx]) {
+    setDraftStatus('編號無效', 'err'); return null;
+  }
+  return list.drafts[idx];
+}
+
+async function loadDraft() {
+  const pick = await pickDraft('讀');
+  if (!pick) return;
+  const data = await postJSON('/api/sched/load-draft', { name: pick.name });
+  if (!data.ok) { setDraftStatus(`❌ ${data.error}`, 'err'); return; }
+  applyDraft(data.draft);
+}
+
+async function deleteDraft() {
+  const pick = await pickDraft('刪');
+  if (!pick) return;
+  if (!confirm(`確定刪除草稿「${pick.name}」？`)) return;
+  const data = await postJSON('/api/sched/delete-draft', { name: pick.name });
+  if (!data.ok) { setDraftStatus(`❌ ${data.error}`, 'err'); return; }
+  setDraftStatus(`已刪 ${pick.name}`, 'ok');
+}
+
+function applyDraft(draft) {
+  const s = draft.state || {};
+  state.year = s.year; state.month = s.month;
+  state.prevYear = s.prevYear; state.prevMonth = s.prevMonth;
+  state.calendar = s.calendar || [];
+  state.baseline = s.baseline || {};
+  state.prevTail = s.prevTail || {};
+  state.H = s.H || 0; state.W = s.W || 0;
+  state.X = s.X;
+  state.targets = s.targets || null;
+  state.prefs = {};
+  for (const k in (s.prefs || {})) state.prefs[k] = new Set(s.prefs[k]);
+  state.lastSolve = s.lastSolve || null;
+
+  // restore form inputs
+  if (s.year) $('year').value = s.year;
+  if (s.month) $('month').value = s.month;
+  if (s.X != null) $('X').value = s.X;
+  $('metric-h').textContent = s.H ?? '—';
+  $('metric-w').textContent = s.W ?? '—';
+  $('metric-sheet').textContent = (s.year && s.month) ? `${s.year}${pad2(s.month)}` : '—';
+
+  // re-render Step 1/2 visuals
+  renderMonthPreview();
+  renderBaseline();
+  if (s.prevYear && s.prevMonth) renderPrevTail(s.prevYear, s.prevMonth);
+
+  // Step 3/4 — only if targets exist
+  if (state.targets) {
+    renderTargets(state.targets);
+    buildPrefsForm();
+    // mark previously selected day-btns
+    $('prefs-container').querySelectorAll('.day-btn').forEach(btn => {
+      const doc = btn.dataset.doctor;
+      const dt = btn.dataset.date;
+      if (state.prefs[doc] && state.prefs[doc].has(dt)) btn.classList.add('selected');
+    });
+    [...DOCTORS_VS, '展瀚', '建寬'].forEach(updatePrefCount);
+  }
+
+  // Step 5 — if a solve result was saved
+  if (state.lastSolve) renderResult(state.lastSolve);
+
+  showStep(draft.step || 1);
+  setDraftStatus(`✓ 已讀入「${draft.state?.year}/${draft.state?.month}」（saved ${draft.saved_at}）`, 'ok');
+}
+
+$('btn-save-draft').addEventListener('click', saveDraft);
+$('btn-load-draft').addEventListener('click', loadDraft);
+$('btn-delete-draft').addEventListener('click', deleteDraft);
 
 $('btn-handoff-keyin').addEventListener('click', async () => {
   if (!state.lastSolve) return;

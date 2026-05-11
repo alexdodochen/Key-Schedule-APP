@@ -33,3 +33,6 @@ _reference_keyin/
 build/
 dist/
 *.spec
+
+# Draft schedules saved mid-workflow — local-only resume points
+sched_drafts/

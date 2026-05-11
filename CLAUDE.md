@@ -85,6 +85,17 @@ Routes:
   `tw_holidays` for the month, stashes into `keyin_routes.prefill_cache`,
   returns `{ok, redirect:"/keyin"}`. The cv_solver `_solve_cache` is the
   source of truth — call only after `/api/sched/solve` has run.
+- `POST /api/sched/save-draft` — writes the current UI state (any of step 1-5)
+  to `sched_drafts/{name}.json`. Default `name = {YYYYMM}`. Body:
+  `{name, step, state}`. The state blob holds `year/month/calendar/baseline/
+  prevTail/H/W/X/targets/prefs/lastSolve/prevYear/prevMonth`. One draft per
+  name; saving overwrites.
+- `GET /api/sched/list-drafts` — lists drafts (newest first). Each entry:
+  `{name, saved_at, saved_by, step, year, month}`.
+- `POST /api/sched/load-draft` — `{name}` → returns the saved blob; UI rehydrates
+  state and jumps to the saved step. The fresh-clone case (calendar / baseline
+  embedded in the draft) means no Google Sheet round-trip is required.
+- `POST /api/sched/delete-draft` — `{name}` → unlinks the file.
 
 `keyin_routes.py` mounts under `/keyin` via `app.include_router(...,
 prefix="/keyin")`. Endpoints (mirror upstream `Key-In-The-CVSchedule`):
@@ -116,6 +127,15 @@ baseline, jk_target=None, seed=None, prev_tail=None)` returns a dict with:
 - `targets`: per-CR 週五/週六/週日 targets (for the result page)
 
 **Constraint design** (see `memory/project_solver_design.md`):
+- **CR 假日總數 hard cap (`_holiday_target`)** — when total CR-eligible
+  holidays > 6, distribute across 3 CRs as evenly as possible (e.g. 8 → 3-3-2).
+  The CR with the HIGHEST cumulative `假日` in baseline gets the smallest
+  share; surplus goes to the LOWEST cumulative CRs. Same shape as
+  `_category_target`, but keyed on `is_taiwan_holiday` rather than a single
+  stat_type. Enforced as a hard cap in the candidate filter alongside
+  `cr_fri_target` / `cr_sat_target` / `cr_sun_target`. With consistent
+  baseline ordering across 假日 vs 週六 vs 週日, the four caps are
+  satisfiable simultaneously (sat+sun = 假日 by construction).
 - **QOD 豁免名單** `QOD_EXEMPT_NAMES = set(VS_LIST) | {"展瀚", "建寬"}` —
   these names bypass the QOD-pair / back-to-back hard rules in 5 places
   (`qod_score`, candidate back-to-back filter, `fixed_pairs` precount,
@@ -191,6 +211,19 @@ CV_APP-only helpers (don't backport without the same need):
   - **「重新跑 solver」按鈕** clears the result calendar / stats / target
     table before triggering a fresh `/api/sched/solve` call, so the user
     visibly sees a "clear → refill" rather than wondering if anything changed.
+  - **Step 3 「CR 預估值班總數」面板** — populated by `compute_initial_targets`
+    output: `cr_holiday_total / cr_weekday_total / cr_total / cr_per_avg /
+    cr_per_doctor`. Shows the post-VS leftover (so user can see "after VS,
+    展瀚, 建寬, CRs need to cover N shifts"). Per-CR holiday split uses the
+    same balance rule as `_holiday_target` so the projection matches what
+    the solver will produce (modulo fixed assignments).
+  - **草稿橫條（draft-bar）** at the top of the page — 💾 存目前進度 / 📂
+    讀草稿 / 🗑 刪草稿. Saves the entire UI state (any of step 1-5) to
+    `sched_drafts/{name}.json` and lets the user resume next time.
+    `_currentStep` is tracked via `showStep()` so the saved draft jumps
+    back to the same step on load. Calendar / baseline / prevTail are
+    serialized in the draft itself so loading does not require a Google
+    Sheet fetch (works fully offline once saved).
 
 ## Doctor roster
 
@@ -262,3 +295,12 @@ Schedule handoff payload (frozen contract — see
   the subtract logic, so it can drift without affecting cumulative
   correctness. `git commit && git push` it manually if you want a versioned
   history outside the Sheet.
+- **Cross-machine setup** — `.gsa.json` is gitignored; a fresh clone has
+  none. Copy it from the parent project at `C:\Users\dr\Downloads\Y\排班\
+  .gsa.json` (same `admission-bot@…iam.gserviceaccount.com` Service Account).
+  Without it, `/api/sched/init` falls into the exception branch and the UI
+  shows "⚠️ 無法連 Google Sheet（baseline 全 0 帶入）". The Google Sheet
+  itself (SHEET_ID `10ilVOmJrr8jjfnMMbtj60tAIIAe1YX3ZRU1RLgn6Elk`) is the
+  cross-machine source of truth — local `schedule_history/` snapshots can
+  drift, the sheet's `值班總數統計` and `{YYYYMM} 班數統計` tabs are
+  authoritative.
