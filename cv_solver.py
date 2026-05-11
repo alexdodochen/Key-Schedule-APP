@@ -57,17 +57,30 @@ def previous_month_last_doctor(baseline_by_date: dict | None) -> Optional[str]:
 
 
 # ── Step 2/3: compute counts before preferences are collected ───────
-def compute_initial_targets(year: int, month: int, X: int, baseline: dict) -> dict:
+def compute_initial_targets(
+    year: int,
+    month: int,
+    X: int,
+    baseline: dict,
+    vs_holiday_exempt: Optional[list[str]] = None,
+) -> dict:
     """Headline counts the UI shows after the user supplies X.
 
     No `fixed` yet; assumes default allocation (4 VS each take 1 holiday +
     1 weekday up to vs_weekday_total). Real per-category CR targets are
     recomputed by the solver once preferences arrive.
 
+    `vs_holiday_exempt` — names of VS who do NOT take any holiday shift
+    this month (e.g. ["朝允", "昭佑"]). Holiday slots are then distributed
+    only among the remaining (non-exempt) VS; any unmet demand is absorbed
+    by CRs (reflected in cr_holiday_total). Weekday distribution is
+    unaffected — an exempt VS can still take weekday shifts.
+
     Returns:
       {
         H, W,
         vs_holiday_total, vs_weekday_total,
+        vs_holiday_exempt: [name, ...],
         vs_per_doctor: {name: {"holiday": n, "weekday": n}},
         jk_count: int,
         warnings: [str, ...],
@@ -82,18 +95,28 @@ def compute_initial_targets(year: int, month: int, X: int, baseline: dict) -> di
     vs_h_total = max(0, H - 6)
     vs_w_total = max(0, W - 15 - X - jk)
 
+    exempt_set = {n for n in (vs_holiday_exempt or []) if n in VS_LIST}
+    non_exempt = [n for n in VS_LIST if n not in exempt_set]
+
     warnings: list[str] = []
     if vs_w_total > VS_TOTAL_CAP * len(VS_LIST):
         warnings.append("VS 平日缺額已超過 4 人 × 1 班的容量；展瀚 X 可能太低")
-    if vs_h_total > VS_HOLIDAY_CAP * len(VS_LIST):
-        warnings.append(
-            f"假日缺 {vs_h_total} 班，超過 4 位 VS × 1 = 4 班；CR 假日 ≤ 2 軟上限可能放寬到 3"
-        )
+    if vs_h_total > VS_HOLIDAY_CAP * len(non_exempt or VS_LIST):
+        shortfall = vs_h_total - VS_HOLIDAY_CAP * len(non_exempt)
+        if exempt_set:
+            warnings.append(
+                f"假日需 {vs_h_total} 班，但僅 {len(non_exempt)} 位 VS 可值"
+                f"（{ '、'.join(exempt_set) } 豁免）；CR 將額外吃 {max(0, shortfall)} 班假日"
+            )
+        else:
+            warnings.append(
+                f"假日缺 {vs_h_total} 班，超過 4 位 VS × 1 = 4 班；CR 假日 ≤ 2 軟上限可能放寬到 3"
+            )
 
     vs_per_doctor: dict[str, dict[str, int]] = {n: {"holiday": 0, "weekday": 0} for n in VS_LIST}
 
     holiday_order = sorted(
-        VS_LIST,
+        non_exempt,
         key=lambda n: (
             baseline.get(n, {}).get("假日", 0),
             -(baseline.get(n, {}).get("假日", 0)
@@ -103,13 +126,13 @@ def compute_initial_targets(year: int, month: int, X: int, baseline: dict) -> di
     )
     h_remaining = vs_h_total
     idx = 0
-    while h_remaining > 0:
-        vs = holiday_order[idx % len(VS_LIST)]
+    while h_remaining > 0 and holiday_order:
+        vs = holiday_order[idx % len(holiday_order)]
         if vs_per_doctor[vs]["holiday"] < VS_HOLIDAY_CAP:
             vs_per_doctor[vs]["holiday"] += 1
             h_remaining -= 1
         idx += 1
-        if idx > len(VS_LIST) * 3:
+        if idx > len(holiday_order) * 3:
             break
 
     weekday_order = sorted(
@@ -180,6 +203,7 @@ def compute_initial_targets(year: int, month: int, X: int, baseline: dict) -> di
         "vs_holiday_total": vs_h_total,
         "vs_weekday_total": vs_w_total,
         "vs_per_doctor": vs_per_doctor,
+        "vs_holiday_exempt": sorted(exempt_set),
         "jk_count": jk,
         "cr_fri_total": cr_fri_total,
         "cr_sat_total": cr_sat_total,
@@ -207,6 +231,7 @@ def solve_month(
     jk_target: Optional[int] = None,
     seed: Optional[int] = None,
     prev_tail: Optional[dict[date, str]] = None,
+    vs_holiday_exempt: Optional[list[str]] = None,
 ) -> Optional[dict]:
     """Run the backtracking solver. Returns None when no feasible schedule
     exists even after relaxing QOD; otherwise returns:
@@ -239,7 +264,7 @@ def solve_month(
     # Fast-fail: if even the optimistic CR demand from compute_initial_targets
     # exceeds 3 × CR_TOTAL_CAP, no feasible schedule exists. Avoids burning
     # minutes in the QOD relaxation loop just to learn this.
-    init = compute_initial_targets(year, month, X, baseline)
+    init = compute_initial_targets(year, month, X, baseline, vs_holiday_exempt=vs_holiday_exempt)
     if init["cr_total"] > CR_TOTAL_CAP * len(CRS):
         return None
 

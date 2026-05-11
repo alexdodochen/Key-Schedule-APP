@@ -75,9 +75,18 @@ Routes:
 - `GET /` → `home.html` (post-login menu — 排班 active, key 班 disabled)
 - `GET /sched` → `schedule_gen.html` (5-step UI)
 - `POST /api/sched/init` — load month context (H, W, baseline, calendar)
-- `POST /api/sched/compute` — given X, return VS/建寬 counts + CR target totals
+- `POST /api/sched/compute` — given X (and optional `vs_holiday_exempt:
+  [name, ...]`), return VS/建寬 counts + CR target totals. Exempt VS names are
+  excluded from the holiday round-robin; their `vs_per_doctor[name].holiday`
+  is forced to 0 and the shortfall is absorbed into `cr_holiday_total`.
 - `POST /api/sched/solve` — run backtracking solver, cache result, return
-  preview (calendar + stats + QOD violations + targets)
+  preview (calendar + stats + QOD violations + targets + `projected_cumulative`).
+  Body also accepts `vs_holiday_exempt: [name, ...]` (passed through to the
+  fast-fail `compute_initial_targets`). `projected_cumulative` is a list of
+  per-doctor rows showing the cumulative tab AFTER writing this month —
+  `baseline[col] - prev_monthly[col班] + monthly_stats_map[col班]` — used by
+  Step 5 to preview before the write. `had_prev_monthly` flag tells the UI to
+  show「偵測到本月舊版班數，預估已扣除舊貢獻」.
 - `POST /api/sched/write` — write cached schedule to Google Sheet (calendar
   tab + monthly stats tab + cumulative stats tab)
 - `POST /api/sched/handoff-to-keyin` — bridge to Phase 2: splits the cached
@@ -211,6 +220,22 @@ CV_APP-only helpers (don't backport without the same need):
   - **「重新跑 solver」按鈕** clears the result calendar / stats / target
     table before triggering a fresh `/api/sched/solve` call, so the user
     visibly sees a "clear → refill" rather than wondering if anything changed.
+  - **Step 5 stats tables grouping** — both `#result-stats` (班數統計) and
+    `#projected-cum-table` (預估累計) render through `renderGroupedRows(...)`
+    keyed off `DOCTOR_GROUPS = [CR: [常胤, 見賢, 麒翔], 中級: [展瀚, 建寬],
+    VS: DOCTORS_VS]`. CR order is **常胤 → 見賢 → 麒翔** (user preference, not
+    cv_solver.CRS order). Group header rows use `bg-gray-50` and `colspan` the
+    full width. Font is `text-sm` (14px), not `text-xs`.
+  - **Step 3 VS 假日豁免 checkbox** — VS 表多一「不值假日」欄。Toggle 觸發
+    `onVsExemptChange` → rebuild `state.vsHolidayExempt` → call
+    `recomputeTargets()` → server returns updated `vs_per_doctor` (exempt names
+    forced to 0 holiday) → re-render. `state.vsHolidayExempt` is persisted in
+    drafts. Step 4 「應選」 chips automatically reflect the override because they
+    read off `state.targets.vs_per_doctor`.
+  - **Step 5 預估累計表** — `#projected-cum-table`. After solve, server returns
+    `projected_cumulative` rows; UI renders `baseline_col(+monthly_contribution)`
+    per cell, highlights touched rows with `bg-amber-50`, and surfaces a
+    `projected-note` banner if `had_prev_monthly=True` (re-write case).
   - **Step 3 「CR 預估值班總數」面板** — populated by `compute_initial_targets`
     output: `cr_holiday_total / cr_weekday_total / cr_total / cr_per_avg /
     cr_per_doctor`. Shows the post-VS leftover (so user can see "after VS,

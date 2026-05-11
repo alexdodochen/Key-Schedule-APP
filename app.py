@@ -317,7 +317,11 @@ async def api_sched_compute(request: Request):
     month    = int(body["month"])
     X        = int(body["X"])
     baseline = body.get("baseline") or {}
-    targets = cv_solver.compute_initial_targets(year, month, X, baseline)
+    vs_holiday_exempt = body.get("vs_holiday_exempt") or []
+    targets = cv_solver.compute_initial_targets(
+        year, month, X, baseline,
+        vs_holiday_exempt=vs_holiday_exempt,
+    )
     return JSONResponse({"ok": True, "targets": targets})
 
 
@@ -335,6 +339,7 @@ async def api_sched_solve(request: Request):
     baseline = body.get("baseline") or {}
     jk_target = body.get("jk_target")
     prev_tail_in = body.get("prev_tail") or {}
+    vs_holiday_exempt = body.get("vs_holiday_exempt") or []
 
     fixed = {_parse_iso_date(k): v for k, v in fixed_in.items() if v}
     avoid = {n: [_parse_iso_date(d) for d in dates]
@@ -345,6 +350,7 @@ async def api_sched_solve(request: Request):
         year, month, X, fixed, avoid, baseline,
         jk_target=int(jk_target) if jk_target is not None else None,
         prev_tail=prev_tail,
+        vs_holiday_exempt=vs_holiday_exempt,
     )
     if result is None:
         audit.log("sched_solve_fail", user=user.username, ip=_client_ip(request),
@@ -359,6 +365,36 @@ async def api_sched_solve(request: Request):
         "monthly_stats_map": result["monthly_stats_map"],
         "baseline": baseline,
     }
+
+    # Projection of the cumulative tab AFTER writing this month — so the user
+    # can sanity-check 累計值班總數 before clicking 寫入. If this same month was
+    # previously written, the prev contribution is read off the sheet and
+    # subtracted (mirrors update_cumulative_stats with previous_monthly=).
+    prev_monthly: dict = {}
+    try:
+        sheet = gsheet_io.get_sheet()
+        prev_monthly = gsheet_io.read_monthly_stats(sheet, f"{year}{month:02d} 班數統計")
+    except Exception:
+        prev_monthly = {}
+
+    KEY_PAIRS = [("平日", "平日班"), ("週五", "週五班"),
+                 ("週六", "週六班"), ("週日", "週日班"), ("假日", "假日班")]
+    projected_cum = []
+    monthly_map = result["monthly_stats_map"]
+    all_names = set(baseline) | set(monthly_map) | set(prev_monthly)
+    for name in sorted(all_names):
+        b = baseline.get(name, {})
+        new = monthly_map.get(name, {})
+        prev = prev_monthly.get(name, {})
+        row = {"姓名": name}
+        delta = {}
+        for cum_key, mon_key in KEY_PAIRS:
+            row[cum_key] = b.get(cum_key, 0) - prev.get(mon_key, 0) + new.get(mon_key, 0)
+            delta[cum_key] = new.get(mon_key, 0) - prev.get(mon_key, 0)
+        row["總班數"] = row["平日"] + row["週五"] + row["假日"]
+        row["delta"] = delta
+        projected_cum.append(row)
+
     audit.log("sched_solve", user=user.username, ip=_client_ip(request),
               detail=(f"{year}/{month:02d} qod_relaxed={result['qod_relaxed']} "
                       f"violations={len(result['qod_violations'])}"))
@@ -376,6 +412,8 @@ async def api_sched_solve(request: Request):
             "cr_sat_target": result["targets"]["cr_sat_target"],
             "cr_sun_target": result["targets"]["cr_sun_target"],
         },
+        "projected_cumulative": projected_cum,
+        "had_prev_monthly": bool(prev_monthly),
     })
 
 
