@@ -141,6 +141,12 @@ def compute_initial_targets(year: int, month: int, X: int, baseline: dict) -> di
     cr_total = cr_holiday_total + cr_weekday_total
     cr_per_avg = cr_total / 3 if cr_total else 0
 
+    if cr_total > CR_TOTAL_CAP * len(CRS):
+        warnings.append(
+            f"⚠️ CR 三人需值 {cr_total} 班，超過硬上限 {CR_TOTAL_CAP}×3={CR_TOTAL_CAP*len(CRS)} 班；"
+            f"請把展瀚 X 調高 ≥ {X + cr_total - CR_TOTAL_CAP * len(CRS)}，否則 solver 會找不到解。"
+        )
+
     # Per-CR projected count: distribute the post-VS leftover (cr_holiday_total
     # / cr_weekday_total) across CRs by cumulative-aware balance — same rule
     # the solver applies, but at the totals level (VS pinning happens later).
@@ -230,11 +236,25 @@ def solve_month(
         H, W = month_h_w(year, month)
         jk_target = max(0, min(JK_WEEKDAY_CAP, W - 15 - X))
 
-    # Per-category CR targets, accounting for fixed assignments
+    # Fast-fail: if even the optimistic CR demand from compute_initial_targets
+    # exceeds 3 × CR_TOTAL_CAP, no feasible schedule exists. Avoids burning
+    # minutes in the QOD relaxation loop just to learn this.
+    init = compute_initial_targets(year, month, X, baseline)
+    if init["cr_total"] > CR_TOTAL_CAP * len(CRS):
+        return None
+
+    # Per-category CR targets, accounting for fixed assignments.
+    # 週五 is independent (no holiday overlap). 週六/週日 are DERIVED from
+    # cr_holiday_target so sat[n] + sun[n] always equals holiday_target[n] —
+    # otherwise the three caps can be jointly infeasible (different baseline
+    # rankings for 假日 vs 週六 vs 週日 produce inconsistent splits, e.g.
+    # holiday cap says 麒翔 ≤ 3 but sat cap=2 + sun cap=2 = 4, then
+    # 常胤 holiday=4 but sat+sun=3 → schedule has nowhere to put the 11th).
     cr_fri_target = _category_target(days, fixed, baseline, get_stat_type, "週五班", "週五")
-    cr_sat_target = _category_target(days, fixed, baseline, get_stat_type, "週六班", "週六")
-    cr_sun_target = _category_target(days, fixed, baseline, get_stat_type, "週日班", "週日")
     cr_holiday_target = _holiday_target(days, fixed, baseline)
+    cr_sat_target, cr_sun_target = _derive_sat_sun_caps(
+        days, fixed, baseline, get_stat_type, cr_holiday_target,
+    )
 
     targets = {
         "cr_fri_target": cr_fri_target,
@@ -335,6 +355,50 @@ def _holiday_target(
         if target[n] < fixed_in_cat[n]:
             target[n] = fixed_in_cat[n]
     return target
+
+
+# ── Internal: derive 週六/週日 caps from holiday cap ─────────────────
+def _derive_sat_sun_caps(
+    days: list[date],
+    fixed: dict[date, str],
+    baseline: dict,
+    get_stat_type,
+    holiday_target: dict[str, int],
+) -> tuple[dict[str, int], dict[str, int]]:
+    """Split each CR's holiday_target into 週六/週日 sub-caps such that
+    sum of sat across CRs equals total_sat days and sat[n]+sun[n]=holiday_target[n].
+
+    Greedy: start with fixed sat counts, then assign each remaining 週六 slot
+    to the CR with the lowest current sat (tiebreak by cumulative 週六).
+    Capped per CR at holiday_target[n] so the remainder for 週日 stays ≥ 0.
+    """
+    cr_eligible_sat = [
+        d for d in days
+        if get_stat_type(d) == "週六班"
+        and (d not in fixed or fixed[d] in CRS)
+    ]
+    fixed_sat = {n: 0 for n in CRS}
+    for d in cr_eligible_sat:
+        if d in fixed:
+            fixed_sat[fixed[d]] += 1
+
+    sat_cap = dict(fixed_sat)
+    remaining = len(cr_eligible_sat) - sum(fixed_sat.values())
+    for _ in range(remaining):
+        eligible = [n for n in CRS if sat_cap[n] < holiday_target.get(n, 99)]
+        if not eligible:
+            break
+        pick = min(
+            eligible,
+            key=lambda n: (
+                sat_cap[n] - fixed_sat[n],
+                baseline.get(n, {}).get("週六", 0),
+            ),
+        )
+        sat_cap[pick] += 1
+
+    sun_cap = {n: max(0, holiday_target.get(n, 0) - sat_cap[n]) for n in CRS}
+    return sat_cap, sun_cap
 
 
 # ── Internal: backtracking ──────────────────────────────────────────

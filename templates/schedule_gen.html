@@ -523,11 +523,17 @@ function renderTargets(t) {
   const crW = t.cr_weekday_total ?? 0;
   const crTotal = t.cr_total ?? 0;
   const avg = (t.cr_per_avg ?? 0).toFixed(2);
-  $('cr-summary').innerHTML =
+  const overload = crTotal > 21;  // CR_TOTAL_CAP × 3
+  let summary =
     `本月共 <b>${state.H}</b> 假 + <b>${state.W}</b> 平 = <b>${state.H + state.W}</b> 天<br>` +
     `VS 支援 <b>${t.vs_holiday_total}</b> 假 + <b>${t.vs_weekday_total}</b> 平；` +
     `展瀚 <b>${state.X}</b> 平；建寬 <b>${jk}</b> 平<br>` +
-    `→ CR 三人合計需值 <b class="text-indigo-700">${crTotal}</b> 班（假 ${crH} + 平 ${crW}），平均每人約 <b>${avg}</b> 班`;
+    `→ CR 三人合計需值 <b class="${overload ? 'text-red-600' : 'text-indigo-700'}">${crTotal}</b> 班（假 ${crH} + 平 ${crW}），平均每人約 <b>${avg}</b> 班`;
+  if (t.warnings && t.warnings.length > 0) {
+    summary += '<br>' + t.warnings.map(w =>
+      `<span class="text-red-700 font-semibold">${w}</span>`).join('<br>');
+  }
+  $('cr-summary').innerHTML = summary;
 
   let crRows = '';
   const cpd = t.cr_per_doctor || {};
