@@ -83,10 +83,16 @@ Routes:
   preview (calendar + stats + QOD violations + targets + `projected_cumulative`).
   Body also accepts `vs_holiday_exempt: [name, ...]` (passed through to the
   fast-fail `compute_initial_targets`). `projected_cumulative` is a list of
-  per-doctor rows showing the cumulative tab AFTER writing this month —
-  `baseline[col] - prev_monthly[col班] + monthly_stats_map[col班]` — used by
-  Step 5 to preview before the write. `had_prev_monthly` flag tells the UI to
-  show「偵測到本月舊版班數，預估已扣除舊貢獻」.
+  per-doctor rows showing the cumulative tab AFTER writing this month. Each
+  row carries four explicit fields so the math is verifiable end-to-end:
+  `baseline[col]` (current cumulative), `prev_contribution[col]` (old version
+  of this month's contribution, read from `{YYYYMM} 班數統計` — 0 if first
+  write), `new_contribution[col]` (this run's solver output), and the per-col
+  projected value `row[col] = baseline - prev_contribution + new_contribution`.
+  `had_prev_monthly` is True when `{YYYYMM} 班數統計` already exists; the UI
+  uses it to switch the banner text between first-write vs rewrite. The Step 5
+  table renders the math explicitly per cell (`projected` on top, `base
+  −prev +new` underneath) so the user can spot any off-by-prev bug visually.
 - `POST /api/sched/write` — write cached schedule to Google Sheet (calendar
   tab + monthly stats tab + cumulative stats tab)
 - `POST /api/sched/handoff-to-keyin` — bridge to Phase 2: splits the cached

@@ -268,7 +268,7 @@
           <tbody id="projected-cum-table"></tbody>
         </table>
         <p class="text-[11px] text-gray-400 mt-1">
-          顯示「寫入後」每位醫師在 <code>值班總數統計</code> 表的預估值；括號是本月貢獻（綠＝新增、紅＝若已有舊版會被減去）。
+          顯示「寫入後」每位醫師在 <code>值班總數統計</code> 表的預估值。每格上面是預估值，下面把「<code>原累計 <span class="text-red-700">−舊版本月</span> <span class="text-emerald-700">+新版本月</span></code>」拆給你看。如果同一個月重新跑 solver，會自動把舊版的本月貢獻減掉、再加上新版的，這樣你 visually 確認過再按寫入。
         </p>
       </div>
 
@@ -576,34 +576,47 @@ function renderGroupedRows(rows, getName, rowFn, colspan) {
 function renderProjectedCumulative(rows, hadPrev) {
   const note = $('projected-note');
   note.textContent = hadPrev
-    ? '⚠ 偵測到本月舊版班數，預估已扣除舊貢獻'
-    : '本月為首次寫入';
+    ? '⚠ 偵測到本月舊版班數：預估 = 累計 − 舊版本月 + 新版本月'
+    : '本月為首次寫入：預估 = 累計 + 新版本月';
   note.className = 'text-[11px] ' + (hadPrev ? 'text-amber-600' : 'text-gray-500');
 
   const KEYS = ['平日', '週五', '週六', '週日', '假日'];
-  function fmtDelta(d) {
-    if (!d) return '';
-    if (d > 0) return ` <span class="text-emerald-700 text-[11px]">(+${d})</span>`;
-    if (d < 0) return ` <span class="text-red-700 text-[11px]">(${d})</span>`;
-    return '';
+  // Cell layout: top line = projected value (final).
+  //              second line = explicit math: baseline (−prev) (+new)
+  // The math line lets the user verify both -prev AND +new are applied,
+  // not just a net delta. Cells where prev=0 AND new=0 stay clean.
+  function fmtCell(baseVal, prevVal, newVal, projVal) {
+    const parts = [];
+    if (prevVal) parts.push(`<span class="text-red-700">−${prevVal}</span>`);
+    if (newVal)  parts.push(`<span class="text-emerald-700">+${newVal}</span>`);
+    const math = parts.length
+      ? `<div class="text-[10px] text-gray-500 leading-tight">${baseVal} ${parts.join(' ')}</div>`
+      : '';
+    return `<td class="px-3 py-2 text-center align-top">
+              <div class="font-medium">${projVal}</div>
+              ${math}
+            </td>`;
   }
   const visible = rows.filter(r => {
-    const delta = r.delta || {};
-    const touched = KEYS.some(k => (delta[k] || 0) !== 0);
+    const pc = r.prev_contribution || {};
+    const nc = r.new_contribution || {};
+    const touched = KEYS.some(k => (pc[k] || 0) !== 0 || (nc[k] || 0) !== 0);
     return touched || r.總班數 !== 0;
   });
   const html = renderGroupedRows(
     visible,
     r => r.姓名,
     r => {
-      const delta = r.delta || {};
-      const touched = KEYS.some(k => (delta[k] || 0) !== 0);
+      const b = r.baseline || {};
+      const pc = r.prev_contribution || {};
+      const nc = r.new_contribution || {};
+      const touched = KEYS.some(k => (pc[k] || 0) !== 0 || (nc[k] || 0) !== 0);
       const rowCls = touched
         ? 'border-t border-gray-200 bg-amber-50'
         : 'border-t border-gray-200 text-gray-400';
-      return `<tr class="${rowCls}"><td class="px-3 py-2 font-medium">${r.姓名}</td>` +
-             KEYS.map(k => `<td class="px-3 py-2 text-center">${r[k]}${fmtDelta(delta[k])}</td>`).join('') +
-             `<td class="px-3 py-2 text-center font-bold">${r.總班數}</td></tr>`;
+      return `<tr class="${rowCls}"><td class="px-3 py-2 font-medium align-top">${r.姓名}</td>` +
+             KEYS.map(k => fmtCell(b[k] || 0, pc[k] || 0, nc[k] || 0, r[k])).join('') +
+             `<td class="px-3 py-2 text-center font-bold align-top">${r.總班數}</td></tr>`;
     },
     7,
   );

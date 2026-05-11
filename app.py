@@ -377,6 +377,9 @@ async def api_sched_solve(request: Request):
     except Exception:
         prev_monthly = {}
 
+    # Per-cell math: projected = baseline - prev_contribution + new_contribution.
+    # All three components are returned so the UI can render them explicitly
+    # and the user can verify the math without trusting a single net delta.
     KEY_PAIRS = [("平日", "平日班"), ("週五", "週五班"),
                  ("週六", "週六班"), ("週日", "週日班"), ("假日", "假日班")]
     projected_cum = []
@@ -387,12 +390,19 @@ async def api_sched_solve(request: Request):
         new = monthly_map.get(name, {})
         prev = prev_monthly.get(name, {})
         row = {"姓名": name}
-        delta = {}
+        prev_contrib: dict[str, int] = {}
+        new_contrib: dict[str, int] = {}
         for cum_key, mon_key in KEY_PAIRS:
-            row[cum_key] = b.get(cum_key, 0) - prev.get(mon_key, 0) + new.get(mon_key, 0)
-            delta[cum_key] = new.get(mon_key, 0) - prev.get(mon_key, 0)
+            base_val = b.get(cum_key, 0)
+            prev_val = prev.get(mon_key, 0)
+            new_val = new.get(mon_key, 0)
+            row[cum_key] = base_val - prev_val + new_val
+            prev_contrib[cum_key] = prev_val
+            new_contrib[cum_key] = new_val
         row["總班數"] = row["平日"] + row["週五"] + row["假日"]
-        row["delta"] = delta
+        row["baseline"] = {k: b.get(k, 0) for k, _ in KEY_PAIRS}
+        row["prev_contribution"] = prev_contrib
+        row["new_contribution"] = new_contrib
         projected_cum.append(row)
 
     audit.log("sched_solve", user=user.username, ip=_client_ip(request),
