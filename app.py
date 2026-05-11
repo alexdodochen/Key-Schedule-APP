@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -245,6 +246,119 @@ async def api_admin_logs(request: Request):
     if not user or not user.is_admin:
         return JSONResponse({"ok": False, "error": "無權限"}, status_code=403)
     return JSONResponse({"ok": True, "logs": audit.read_logs(limit=500)})
+
+
+# ── git update (multi-machine sync) ─────────────────────────────────
+# This is a desktop app that ships from a single GitHub repo and is run on
+# multiple machines (work laptop + clinic PC). When the user pushes a new
+# commit from one machine, the others need an easy way to pull. These two
+# endpoints drive a button in home.html that checks remote state and runs
+# `git pull --rebase origin <branch>`. Python code changes still need a
+# manual app restart to take effect; templates auto-reload via Jinja.
+def _run_git(*args: str, timeout: int = 30) -> tuple[int, str, str]:
+    """Run a git command in the project dir. Returns (returncode, stdout, stderr)."""
+    proc = subprocess.run(
+        ["git", *args], cwd=str(BASE_DIR),
+        capture_output=True, text=True, timeout=timeout,
+        encoding="utf-8", errors="replace",
+    )
+    return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
+
+
+@app.get("/api/update/check")
+async def api_update_check(request: Request):
+    user = _get_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "未登入"}, status_code=401)
+    try:
+        # Ensure we're actually in a git checkout
+        rc, _, err = _run_git("rev-parse", "--is-inside-work-tree")
+        if rc != 0:
+            return JSONResponse({"ok": False, "error": "本機不是 git 工作目錄，無法檢查更新"})
+        rc, branch, _ = _run_git("rev-parse", "--abbrev-ref", "HEAD")
+        if rc != 0 or not branch:
+            return JSONResponse({"ok": False, "error": "無法取得目前分支"})
+        # Fetch the latest from origin (network call — can be slow / fail)
+        rc, _, ferr = _run_git("fetch", "origin", branch, timeout=20)
+        if rc != 0:
+            return JSONResponse({"ok": False, "error": f"無法連到 GitHub：{ferr[:200]}"})
+        rc, cur_sha, _ = _run_git("rev-parse", "HEAD")
+        rc2, rem_sha, _ = _run_git("rev-parse", f"origin/{branch}")
+        rc3, behind_log, _ = _run_git(
+            "log", f"HEAD..origin/{branch}", "--oneline", "--no-decorate",
+        )
+        rc4, ahead_log, _ = _run_git(
+            "log", f"origin/{branch}..HEAD", "--oneline", "--no-decorate",
+        )
+        rc5, status_short, _ = _run_git("status", "--porcelain")
+        behind_commits = [ln for ln in behind_log.splitlines() if ln]
+        ahead_commits = [ln for ln in ahead_log.splitlines() if ln]
+        return JSONResponse({
+            "ok": True,
+            "branch": branch,
+            "current": cur_sha[:7],
+            "remote": rem_sha[:7],
+            "behind": len(behind_commits),
+            "ahead": len(ahead_commits),
+            "behind_commits": behind_commits,
+            "ahead_commits": ahead_commits,
+            "dirty": bool(status_short),
+            "dirty_files": status_short.splitlines() if status_short else [],
+        })
+    except subprocess.TimeoutExpired:
+        return JSONResponse({"ok": False, "error": "git 操作逾時 — 檢查網路連線"})
+    except FileNotFoundError:
+        return JSONResponse({"ok": False, "error": "本機找不到 git 指令（請安裝 Git for Windows）"})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"檢查失敗：{e}"})
+
+
+@app.post("/api/update/pull")
+async def api_update_pull(request: Request):
+    user = _get_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "未登入"}, status_code=401)
+    try:
+        rc, branch, _ = _run_git("rev-parse", "--abbrev-ref", "HEAD")
+        if rc != 0 or not branch:
+            return JSONResponse({"ok": False, "error": "無法取得目前分支"})
+        # Refuse if local has uncommitted changes — pulling on a dirty tree
+        # is the #1 way new users lose work. Surface the file list instead.
+        rc, status_short, _ = _run_git("status", "--porcelain")
+        if status_short:
+            return JSONResponse({
+                "ok": False,
+                "error": "本機有未提交的變更，請先處理後再更新",
+                "dirty_files": status_short.splitlines(),
+            })
+        rc, before_sha, _ = _run_git("rev-parse", "HEAD")
+        rc, out, err = _run_git("pull", "--rebase", "origin", branch, timeout=60)
+        if rc != 0:
+            return JSONResponse({
+                "ok": False,
+                "error": "git pull 失敗",
+                "detail": (out + "\n" + err).strip()[:500],
+            })
+        rc, after_sha, _ = _run_git("rev-parse", "HEAD")
+        rc, summary, _ = _run_git(
+            "log", f"{before_sha}..HEAD", "--oneline", "--no-decorate",
+        )
+        new_commits = [ln for ln in summary.splitlines() if ln]
+        audit.log("update_pull", user=user.username, ip=_client_ip(request),
+                  detail=f"{before_sha[:7]}->{after_sha[:7]} ({len(new_commits)})")
+        return JSONResponse({
+            "ok": True,
+            "before": before_sha[:7],
+            "after": after_sha[:7],
+            "new_commits": new_commits,
+            "restart_required": before_sha != after_sha,
+        })
+    except subprocess.TimeoutExpired:
+        return JSONResponse({"ok": False, "error": "git pull 逾時 — 檢查網路連線"})
+    except FileNotFoundError:
+        return JSONResponse({"ok": False, "error": "本機找不到 git 指令"})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"更新失敗：{e}"})
 
 
 # ── scheduling APIs ─────────────────────────────────────────────────

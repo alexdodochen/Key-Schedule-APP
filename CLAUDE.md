@@ -72,6 +72,18 @@ Routes:
 - `GET /login`, `POST /login`, `GET /logout`, `GET /register`, `POST /register`
 - `GET /admin`, `GET /api/admin/users`, `POST /api/admin/approve/{u}`,
   `POST /api/admin/delete/{u}`, `GET /api/admin/logs`
+- `GET /api/update/check` — multi-machine sync. Runs `git fetch origin <branch>`
+  then computes ahead/behind counts vs `origin/<branch>`. Also surfaces local
+  uncommitted changes via `git status --porcelain` so the UI can warn before
+  attempting a pull. Returns `{ok, branch, current, remote, behind, ahead,
+  behind_commits, ahead_commits, dirty, dirty_files}`. Auto-invoked when
+  `home.html` loads; powers the 更新 button (latest / N behind / error states).
+  No-git / not-a-repo / network failure are all surfaced cleanly via `error`.
+- `POST /api/update/pull` — refuses if the working tree is dirty (to protect
+  in-progress work). Otherwise runs `git pull --rebase origin <branch>` and
+  reports the new commits. Templates auto-reload via Jinja, but Python code
+  changes (`app.py`, `cv_solver.py`, `gsheet_io.py`…) need a manual app
+  restart — the UI prompts for this whenever `restart_required` is true.
 - `GET /` → `home.html` (post-login menu — 排班 active, key 班 disabled)
 - `GET /sched` → `schedule_gen.html` (5-step UI)
 - `POST /api/sched/init` — load month context (H, W, baseline, calendar)
