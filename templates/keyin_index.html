@@ -87,6 +87,26 @@
 
 <main class="max-w-5xl mx-auto px-4 py-6 space-y-6">
 
+  <!-- ── 草稿橫條 ─────────────────────────────────────────── -->
+  <section class="bg-amber-50 border border-amber-200 rounded-xl shadow-sm p-3 flex flex-wrap items-center gap-2">
+    <span class="text-sm font-semibold text-amber-800">📁 草稿</span>
+    <input id="draft-name" type="text" placeholder="名稱（預設 YYYYMM）"
+           class="border border-amber-300 rounded px-2 py-1 text-sm w-44 focus:outline-none focus:ring-1 focus:ring-amber-400">
+    <button onclick="saveDraft()" class="bg-amber-600 hover:bg-amber-700 text-white px-3 py-1 rounded text-sm font-semibold transition">
+      💾 存目前進度
+    </button>
+    <select id="draft-select" onchange="onDraftSelect()" class="border border-amber-300 rounded px-2 py-1 text-sm">
+      <option value="">— 選草稿 —</option>
+    </select>
+    <button onclick="loadDraft()" class="bg-amber-600 hover:bg-amber-700 text-white px-3 py-1 rounded text-sm font-semibold transition">
+      📂 讀草稿
+    </button>
+    <button onclick="deleteDraft()" class="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded text-sm font-semibold transition">
+      🗑 刪草稿
+    </button>
+    <span id="draft-status" class="text-xs text-gray-500 ml-auto"></span>
+  </section>
+
   <!-- ── STEP 1: 月份 ─────────────────────────────────────── -->
   <section class="bg-white rounded-xl shadow p-5">
     <h2 class="font-bold text-gray-700 text-base mb-4 flex items-center">
@@ -480,10 +500,163 @@
     } catch { return false; }
   }
 
+  // ── 草稿 save / load / delete ─────────────────────────────────────
+  function setDraftStatus(text, kind) {
+    const el = document.getElementById('draft-status');
+    el.textContent = text;
+    el.className = 'text-xs ml-auto';
+    if (kind === 'ok') el.classList.add('text-emerald-700');
+    else if (kind === 'err') el.classList.add('text-red-700');
+    else el.classList.add('text-gray-500');
+  }
+
+  // The draft state = exactly what doStart sends. We add a snapshot of any
+  // parsed-but-not-yet-applied Excel upload so the user can resume that too.
+  function gatherDraftState() {
+    const cfg = collectConfig();
+    return {
+      ...cfg,
+      parsed_vs: _parsedVS || {},
+      parsed_cr: _parsedCR || {},
+    };
+  }
+
+  async function refreshDraftList() {
+    try {
+      const r = await fetch('/keyin/api/list-drafts');
+      const d = await r.json();
+      if (!d.ok) return;
+      const sel = document.getElementById('draft-select');
+      const prev = sel.value;
+      sel.innerHTML = '<option value="">— 選草稿 —</option>' +
+        d.drafts.map(x => {
+          const t = (x.saved_at || '').replace('T', ' ').slice(0, 16);
+          return `<option value="${x.name}">${x.name} (${x.year}/${x.month} · ${t})</option>`;
+        }).join('');
+      if (prev) sel.value = prev;
+    } catch {}
+  }
+
+  function onDraftSelect() {
+    const v = document.getElementById('draft-select').value;
+    if (v) document.getElementById('draft-name').value = v;
+  }
+
+  async function saveDraft() {
+    const state = gatherDraftState();
+    if (!state.year || !state.month) {
+      setDraftStatus('請先生成排班表', 'err');
+      return;
+    }
+    const nameInput = document.getElementById('draft-name').value.trim();
+    const name = nameInput || `${state.year}${String(state.month).padStart(2,'0')}`;
+    setDraftStatus('存檔中…');
+    try {
+      const r = await fetch('/keyin/api/save-draft', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ name, state }),
+      });
+      const d = await r.json();
+      if (!d.ok) { setDraftStatus('❌ ' + (d.error || '存檔失敗'), 'err'); return; }
+      setDraftStatus(`✓ 已存「${d.name}」(${d.saved_at.replace('T',' ').slice(0,16)})`, 'ok');
+      await refreshDraftList();
+      document.getElementById('draft-select').value = d.name;
+    } catch (e) {
+      setDraftStatus('❌ ' + e, 'err');
+    }
+  }
+
+  async function loadDraft() {
+    const name = (document.getElementById('draft-select').value || document.getElementById('draft-name').value || '').trim();
+    if (!name) { setDraftStatus('請先選擇草稿', 'err'); return; }
+    setDraftStatus('讀取中…');
+    try {
+      const r = await fetch('/keyin/api/load-draft', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ name }),
+      });
+      const d = await r.json();
+      if (!d.ok) { setDraftStatus('❌ ' + (d.error || '讀取失敗'), 'err'); return; }
+      const s = d.draft.state || {};
+      // Rehydrate year/month and rebuild the calendar grid first
+      if (s.year) document.getElementById('inp-year').value = s.year;
+      if (s.month) document.getElementById('inp-month').value = String(s.month);
+      generateCalendar();
+      // Per-day VS/CR/holiday
+      const days = new Date(s.year, s.month, 0).getDate();
+      const vsMap = s.vs_schedule || {};
+      const crMap = s.cr_schedule || {};
+      const holSet = new Set(s.tw_holidays || []);
+      for (let dd = 1; dd <= days; dd++) {
+        const vs = vsMap[dd] || vsMap[String(dd)];
+        const cr = crMap[dd] || crMap[String(dd)];
+        const vsEl = document.getElementById('vs-'+dd);
+        const crEl = document.getElementById('cr-'+dd);
+        if (vsEl && vs) vsEl.value = vs;
+        if (crEl && cr) crEl.value = cr;
+        const ds = `${s.year}-${String(s.month).padStart(2,'0')}-${String(dd).padStart(2,'0')}`;
+        const cb = document.getElementById('hol-'+dd);
+        if (cb) {
+          const dt = new Date(s.year, s.month - 1, dd);
+          const weekend = dt.getDay() === 0 || dt.getDay() === 6;
+          cb.checked = holSet.has(ds) || weekend;
+          toggleHolidayRow(dd, cb.checked);
+        }
+      }
+      // Rotation lists (set value on the underlying input — the visible field)
+      const rotIds = ['waizhao_vs_list','waizhao_r_list','neizhao_vs_list','neizhao_r_list',
+                      'icu_vs_list','icu_r_list','jiuzhen_r_list'];
+      rotIds.forEach(id => {
+        const arr = s[id];
+        const el = document.getElementById(id);
+        if (el && Array.isArray(arr) && arr.length) el.value = arr.join(',');
+      });
+      // Restore parsed-but-not-yet-applied Excel preview, if any
+      if (s.parsed_vs && Object.keys(s.parsed_vs).length) {
+        _parsedVS = s.parsed_vs;
+        _parsedCR = s.parsed_cr || {};
+        const ddays = new Set([...Object.keys(_parsedVS), ...Object.keys(_parsedCR)].map(Number).sort((a,b)=>a-b));
+        document.getElementById('upload-preview-body').innerHTML = Array.from(ddays).map(dd => `
+          <tr><td class="border px-2 py-1 text-center">${dd}</td><td class="border px-2 py-1">${_parsedVS[dd]||''}</td><td class="border px-2 py-1">${_parsedCR[dd]||''}</td></tr>
+        `).join('');
+        document.getElementById('upload-summary').textContent =
+          `(從草稿還原) VS ${Object.keys(_parsedVS).length} 天 ｜ CR ${Object.keys(_parsedCR).length} 天`;
+        document.getElementById('upload-result').classList.remove('hidden');
+      }
+      setDraftStatus(`✓ 已讀入「${name}」(saved ${d.draft.saved_at.replace('T',' ').slice(0,16)})`, 'ok');
+    } catch (e) {
+      setDraftStatus('❌ ' + e, 'err');
+    }
+  }
+
+  async function deleteDraft() {
+    const name = (document.getElementById('draft-select').value || document.getElementById('draft-name').value || '').trim();
+    if (!name) { setDraftStatus('請先選擇草稿', 'err'); return; }
+    if (!confirm(`刪除草稿「${name}」？`)) return;
+    try {
+      const r = await fetch('/keyin/api/delete-draft', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ name }),
+      });
+      const d = await r.json();
+      if (!d.ok) { setDraftStatus('❌ ' + (d.error || '刪除失敗'), 'err'); return; }
+      setDraftStatus(`✓ 已刪除「${name}」`, 'ok');
+      document.getElementById('draft-select').value = '';
+      document.getElementById('draft-name').value = '';
+      await refreshDraftList();
+    } catch (e) {
+      setDraftStatus('❌ ' + e, 'err');
+    }
+  }
+
   window.addEventListener('load', async () => {
     connectWS();
     fetch('/keyin/api/status').then(r => r.json()).then(d => updateState(d.state));
     await loadPrefill();
+    await refreshDraftList();
   });
 </script>
 <!-- Footer Credit -->

@@ -133,6 +133,16 @@ prefix="/keyin")`. Endpoints (mirror upstream `Key-In-The-CVSchedule`):
 - `POST /keyin/api/start | continue | cancel`
 - `GET /keyin/api/status`
 - `WS /keyin/ws`
+- `POST /keyin/api/save-draft` — writes the current form state to
+  `keyin_drafts/{name}.json` (default name = `{YYYYMM}`, payload =
+  `collectConfig()` output + parsed-but-not-yet-applied Excel snapshot
+  in `parsed_vs` / `parsed_cr`). One file per name; saves overwrite.
+- `GET /keyin/api/list-drafts` — newest first; each entry has
+  `{name, saved_at, saved_by, year, month}`.
+- `POST /keyin/api/load-draft` — `{name}` → returns the saved blob; the
+  UI rehydrates year/month → re-runs `generateCalendar()` → re-fills
+  per-day VS/CR/holiday → rotation lists → upload-preview table.
+- `POST /keyin/api/delete-draft` — `{name}` → unlinks the file.
 
 Login/register/admin live in `app.py` and are shared — `keyin_routes.py`
 does not redefine them. `auth.py` and `audit.py` were verified

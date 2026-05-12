@@ -10,7 +10,9 @@ copies (verified via diff before vendoring).
 from __future__ import annotations
 
 import asyncio
+import json
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -24,6 +26,8 @@ from keyin_excel_parser import parse_schedule_excel
 from keyin_scheduler import ConnectionManager, SchedulerSession, build_schedule_from_config
 
 BASE_DIR = Path(__file__).parent
+DRAFTS_DIR = BASE_DIR / "keyin_drafts"
+DRAFTS_DIR.mkdir(exist_ok=True)
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
 router = APIRouter()
@@ -167,6 +171,92 @@ async def api_status(request: Request):
         if u:
             audit.log("keyin_done", user=u.username, ip=_client_ip(request))
     return JSONResponse({"state": session.state, "logs": session.logs[-100:]})
+
+
+# ── Draft save / load (mid-form-fill resume points, local-only) ─────
+# Mirrors the 排班 path's sched_drafts/. The user types VS/CR per day +
+# rotation lists into the form, which can take a while; they can stash
+# the in-progress state and reopen the app later without redoing it.
+# Stored under keyin_drafts/{safe_name}.json (gitignored).
+@router.post("/api/save-draft")
+async def api_keyin_save_draft(request: Request):
+    user = _get_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "未登入"}, status_code=401)
+    body = await request.json()
+    state_blob = body.get("state") or {}
+    year = state_blob.get("year")
+    month = state_blob.get("month")
+    if not year or not month:
+        return JSONResponse({"ok": False, "error": "state 缺 year/month"})
+    name = body.get("name") or f"{int(year)}{int(month):02d}"
+    safe = "".join(c for c in str(name) if c.isalnum() or c in "_-")
+    if not safe:
+        return JSONResponse({"ok": False, "error": "草稿名稱不合法"})
+    payload = {
+        "saved_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+        "saved_by": user.username,
+        "state": state_blob,
+    }
+    path = DRAFTS_DIR / f"{safe}.json"
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    audit.log("keyin_save_draft", user=user.username, ip=_client_ip(request), detail=safe)
+    return JSONResponse({"ok": True, "name": safe, "saved_at": payload["saved_at"]})
+
+
+@router.get("/api/list-drafts")
+async def api_keyin_list_drafts(request: Request):
+    user = _get_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "未登入"}, status_code=401)
+    items = []
+    for f in sorted(DRAFTS_DIR.glob("*.json")):
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        s = d.get("state") or {}
+        items.append({
+            "name": f.stem,
+            "saved_at": d.get("saved_at", ""),
+            "saved_by": d.get("saved_by", ""),
+            "year": s.get("year"),
+            "month": s.get("month"),
+        })
+    items.sort(key=lambda x: x["saved_at"], reverse=True)
+    return JSONResponse({"ok": True, "drafts": items})
+
+
+@router.post("/api/load-draft")
+async def api_keyin_load_draft(request: Request):
+    user = _get_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "未登入"}, status_code=401)
+    body = await request.json()
+    name = "".join(c for c in str(body.get("name", "")) if c.isalnum() or c in "_-")
+    if not name:
+        return JSONResponse({"ok": False, "error": "缺 name"})
+    path = DRAFTS_DIR / f"{name}.json"
+    if not path.exists():
+        return JSONResponse({"ok": False, "error": "草稿不存在"})
+    audit.log("keyin_load_draft", user=user.username, ip=_client_ip(request), detail=name)
+    return JSONResponse({"ok": True, "draft": json.loads(path.read_text(encoding="utf-8"))})
+
+
+@router.post("/api/delete-draft")
+async def api_keyin_delete_draft(request: Request):
+    user = _get_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "未登入"}, status_code=401)
+    body = await request.json()
+    name = "".join(c for c in str(body.get("name", "")) if c.isalnum() or c in "_-")
+    if not name:
+        return JSONResponse({"ok": False, "error": "缺 name"})
+    path = DRAFTS_DIR / f"{name}.json"
+    if path.exists():
+        path.unlink()
+    audit.log("keyin_delete_draft", user=user.username, ip=_client_ip(request), detail=name)
+    return JSONResponse({"ok": True})
 
 
 # ── websocket ───────────────────────────────────────────────────────

@@ -37,5 +37,8 @@ dist/
 # Draft schedules saved mid-workflow — local-only resume points
 sched_drafts/
 
+# Draft keyin form state saved mid-fill — local-only resume points
+keyin_drafts/
+
 # Pre-rewrite snapshots of 值班總數統計 (created before bulk regenerate ops)
 cumulative_backup_*.json
