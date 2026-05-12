@@ -51,10 +51,16 @@
   <!-- ── 草稿列：任一步都能存 / 讀 / 刪 ────────────────────────── -->
   <section id="draft-bar" class="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-center flex-wrap gap-2 text-sm">
     <span class="font-semibold text-amber-800">💾 草稿（本機）</span>
+    <input id="draft-name" type="text" placeholder="名稱（預設 YYYYMM）"
+           class="border border-amber-300 rounded px-2 py-1 text-xs w-44 focus:outline-none focus:ring-1 focus:ring-amber-400">
     <button id="btn-save-draft" type="button"
       class="bg-amber-600 hover:bg-amber-700 text-white px-3 py-1 rounded text-xs font-semibold">
       存目前進度
     </button>
+    <select id="draft-select"
+            class="border border-amber-300 rounded px-2 py-1 text-xs">
+      <option value="">— 選草稿 —</option>
+    </select>
     <button id="btn-load-draft" type="button"
       class="bg-white border border-amber-400 text-amber-700 hover:bg-amber-100 px-3 py-1 rounded text-xs font-semibold">
       讀草稿
@@ -292,6 +298,9 @@
 
 </main>
 
+<div class="fixed bottom-2 left-4 text-[11px] text-gray-500 pointer-events-none select-none">
+  202604–202607 使用
+</div>
 <div class="fixed bottom-2 right-4 text-[10px] text-gray-400 pointer-events-none select-none">
   應用程式由 114級 CV 陳常胤醫師 與 Claude code 及 Gemini CLI 合作開發
 </div>
@@ -961,54 +970,62 @@ function serializeState() {
   };
 }
 
+async function refreshDraftList() {
+  try {
+    const res = await fetch('/api/sched/list-drafts');
+    const list = await res.json();
+    if (!list.ok) return;
+    const sel = $('draft-select');
+    const prev = sel.value;
+    sel.innerHTML = '<option value="">— 選草稿 —</option>' +
+      list.drafts.map(d => {
+        const t = (d.saved_at || '').replace('T', ' ').slice(0, 16);
+        return `<option value="${d.name}">${d.name} (${d.year}/${d.month} · step ${d.step} · ${t})</option>`;
+      }).join('');
+    if (prev) sel.value = prev;
+  } catch {}
+}
+
 async function saveDraft() {
   if (!state.year || !state.month) {
     setDraftStatus('還沒載入月份，沒東西可存', 'err'); return;
   }
   const defaultName = `${state.year}${pad2(state.month)}`;
-  const name = prompt('草稿名稱（預設 = 月份）：', defaultName);
-  if (name == null) return;
+  const typed = $('draft-name').value.trim();
+  const name = typed || defaultName;
   const data = await postJSON('/api/sched/save-draft', {
-    name: name || defaultName,
+    name,
     step: _currentStep,
     state: serializeState(),
   });
   if (!data.ok) { setDraftStatus(`❌ 存失敗：${data.error}`, 'err'); return; }
-  setDraftStatus(`✓ 已存：${data.name}（step ${_currentStep} @ ${data.saved_at}）`, 'ok');
+  setDraftStatus(`✓ 已存：${data.name}（step ${_currentStep} @ ${data.saved_at.replace('T',' ').slice(0,16)}）`, 'ok');
+  await refreshDraftList();
+  $('draft-select').value = data.name;
 }
 
-async function pickDraft(verb) {
-  const res = await fetch('/api/sched/list-drafts');
-  const list = await res.json();
-  if (!list.ok || list.drafts.length === 0) {
-    setDraftStatus('沒有草稿', 'err'); return null;
-  }
-  const lines = list.drafts.map((d, i) =>
-    `${i + 1}. ${d.name}  ｜ step ${d.step}  ｜ ${d.saved_at}`);
-  const pick = prompt(`${verb}哪個草稿？輸入編號：\n\n${lines.join('\n')}`);
-  if (!pick) return null;
-  const idx = parseInt(pick, 10) - 1;
-  if (Number.isNaN(idx) || !list.drafts[idx]) {
-    setDraftStatus('編號無效', 'err'); return null;
-  }
-  return list.drafts[idx];
+function _pickedDraftName() {
+  return ($('draft-select').value || $('draft-name').value || '').trim();
 }
 
 async function loadDraft() {
-  const pick = await pickDraft('讀');
-  if (!pick) return;
-  const data = await postJSON('/api/sched/load-draft', { name: pick.name });
+  const name = _pickedDraftName();
+  if (!name) { setDraftStatus('請先在下拉選單選一個草稿', 'err'); return; }
+  const data = await postJSON('/api/sched/load-draft', { name });
   if (!data.ok) { setDraftStatus(`❌ ${data.error}`, 'err'); return; }
   applyDraft(data.draft);
 }
 
 async function deleteDraft() {
-  const pick = await pickDraft('刪');
-  if (!pick) return;
-  if (!confirm(`確定刪除草稿「${pick.name}」？`)) return;
-  const data = await postJSON('/api/sched/delete-draft', { name: pick.name });
+  const name = _pickedDraftName();
+  if (!name) { setDraftStatus('請先在下拉選單選一個草稿', 'err'); return; }
+  if (!confirm(`確定刪除草稿「${name}」？`)) return;
+  const data = await postJSON('/api/sched/delete-draft', { name });
   if (!data.ok) { setDraftStatus(`❌ ${data.error}`, 'err'); return; }
-  setDraftStatus(`已刪 ${pick.name}`, 'ok');
+  setDraftStatus(`已刪 ${name}`, 'ok');
+  $('draft-select').value = '';
+  $('draft-name').value = '';
+  await refreshDraftList();
 }
 
 function applyDraft(draft) {
@@ -1062,6 +1079,13 @@ function applyDraft(draft) {
 $('btn-save-draft').addEventListener('click', saveDraft);
 $('btn-load-draft').addEventListener('click', loadDraft);
 $('btn-delete-draft').addEventListener('click', deleteDraft);
+// Sync the typed name when user picks from the dropdown
+$('draft-select').addEventListener('change', () => {
+  const v = $('draft-select').value;
+  if (v) $('draft-name').value = v;
+});
+// Populate the dropdown on page load
+refreshDraftList();
 
 $('btn-handoff-keyin').addEventListener('click', async () => {
   if (!state.lastSolve) return;
