@@ -1,0 +1,6 @@
+- [HANDOFF.md](HANDOFF.md) — last-session snapshot; check this first
+- [Google Sheet authoritative across machines](feedback_gsheet_authoritative.md) — fresh clone needs `.gsa.json` from parent project; never trust local snapshots over the sheet
+- [CR holiday 3-3-2 balance](feedback_cr_holiday_balance.md) — when CR holidays > 6, distribute evenly; highest cumulative 假日 takes the smallest share
+- [Show explicit math in projections](feedback_show_explicit_math.md) — UI cells with multi-component formulas must render base/−prev/+new separately, not just net delta
+- [202508-202603 統計 historical snapshot](reference_sheet_historical_snapshot_tab.md) — recomputed 2026-05-18 from CV班表.xlsx so 假日==週六+週日; cumulative incl. 202606; tools recompute_hist.py / gen_202606_stats.py; sandbox blocks gspread net
+- [Dropdown picker > prompt()](feedback_dropdown_over_prompt.md) — save/load UIs must use `<select>` dropdowns, never `prompt('輸入編號')`
