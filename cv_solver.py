@@ -310,6 +310,39 @@ def solve_month(
     return None
 
 
+def recompute_from_schedule(
+    year: int,
+    month: int,
+    schedule: dict[date, str],
+) -> dict:
+    """Recompute stats for a manually-edited schedule — no solver run.
+
+    The user is allowed to hand-tweak the solver's output in Step 5 (swap
+    who's on which day). This re-derives the per-doctor stats and QOD
+    violations from the FINAL edited `{date: name}` map using the exact
+    same classification (`make_stat_type_fn` / `_compute_stats`) and QOD
+    scan the solver uses, so the written sheet + cumulative reflect the
+    edited reality, not the original solve.
+
+    Returns the same shape as `solve_month` minus `targets` (targets stay
+    pinned from the original solve — they describe the solver's caps, not
+    the edited result). `qod_relaxed`/`max_qod` are informational only here:
+    a manual edit can introduce QOD pairs the solver would have avoided,
+    so `qod_violations` simply reflects whatever the edited schedule has.
+    """
+    get_stat_type = make_stat_type_fn(is_taiwan_holiday)
+    stats_rows, monthly_map = _compute_stats(schedule, get_stat_type)
+    qod_violations = _scan_qod(schedule)
+    return {
+        "schedule": schedule,
+        "stats_rows": stats_rows,
+        "monthly_stats_map": monthly_map,
+        "qod_violations": qod_violations,
+        "qod_relaxed": len(qod_violations) > 0,
+        "max_qod": len(qod_violations),
+    }
+
+
 # ── Internal: per-category CR target ────────────────────────────────
 def _category_target(
     days: list[date],

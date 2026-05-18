@@ -3,13 +3,16 @@
 
 Routes:
   /login, /register, /logout    — auth (templates from keyin)
-  /                             — home menu (排班 / key班)
+  /                             — home menu (排班 / key班 / 查閱班表)
   /sched                        — 5-step scheduling UI (Phase 1)
+  /sheet                        — read-only Google Sheet viewer
   /admin                        — admin console
   /api/sched/init               — load month context (H, W, baseline, holidays)
   /api/sched/compute            — compute VS / 建寬 / category targets given X
   /api/sched/solve              — run backtracking solver (preview only)
   /api/sched/write              — write the solved schedule to Google Sheet
+  /api/sheet/list-tabs          — list all worksheet tabs in the master Sheet
+  /api/sheet/read-tab           — return one worksheet's grid as 2-D values
 """
 from __future__ import annotations
 
@@ -82,6 +85,51 @@ def _serialize_schedule(schedule: dict[date, str]) -> list[dict]:
             "doctor": schedule[d],
         })
     return out
+
+
+def _build_projection(year: int, month: int, baseline: dict,
+                      monthly_map: dict) -> tuple[list[dict], bool]:
+    """Projected `值班總數統計` AFTER writing this month.
+
+    projected = baseline − prev_contribution + new_contribution, with all
+    three components returned per cell so the UI can render the math
+    explicitly. `prev_contribution` is read off the existing
+    `{YYYYMM} 班數統計` tab (0 if first write). Shared by /api/sched/solve
+    and /api/sched/apply-edits so the projection always reflects whatever
+    schedule (solved or hand-edited) currently sits in the cache.
+    """
+    prev_monthly: dict = {}
+    try:
+        sheet = gsheet_io.get_sheet()
+        prev_monthly = gsheet_io.read_monthly_stats(
+            sheet, f"{year}{month:02d} 班數統計")
+    except Exception:
+        prev_monthly = {}
+
+    KEY_PAIRS = [("平日", "平日班"), ("週五", "週五班"),
+                 ("週六", "週六班"), ("週日", "週日班"), ("假日", "假日班")]
+    projected_cum = []
+    all_names = set(baseline) | set(monthly_map) | set(prev_monthly)
+    for name in sorted(all_names):
+        b = baseline.get(name, {})
+        new = monthly_map.get(name, {})
+        prev = prev_monthly.get(name, {})
+        row = {"姓名": name}
+        prev_contrib: dict[str, int] = {}
+        new_contrib: dict[str, int] = {}
+        for cum_key, mon_key in KEY_PAIRS:
+            base_val = b.get(cum_key, 0)
+            prev_val = prev.get(mon_key, 0)
+            new_val = new.get(mon_key, 0)
+            row[cum_key] = base_val - prev_val + new_val
+            prev_contrib[cum_key] = prev_val
+            new_contrib[cum_key] = new_val
+        row["總班數"] = row["平日"] + row["週五"] + row["假日"]
+        row["baseline"] = {k: b.get(k, 0) for k, _ in KEY_PAIRS}
+        row["prev_contribution"] = prev_contrib
+        row["new_contribution"] = new_contrib
+        projected_cum.append(row)
+    return projected_cum, bool(prev_monthly)
 
 
 # ── auth pages ──────────────────────────────────────────────────────
@@ -361,6 +409,60 @@ async def api_update_pull(request: Request):
         return JSONResponse({"ok": False, "error": f"更新失敗：{e}"})
 
 
+# ── Google Sheet read-only viewer ───────────────────────────────────
+# Lets the user browse any worksheet (calendar tabs, 班數統計 tabs,
+# 值班總數統計, 主治醫師抽籤表 …) inside the app without opening the
+# Sheet in a browser. Read-only by design — uses the same service-account
+# credential as the solver/write paths.
+@app.get("/sheet", response_class=HTMLResponse)
+async def sheet_viewer_page(request: Request):
+    user = _get_user(request)
+    if not user:
+        return RedirectResponse(url="/login")
+    return templates.TemplateResponse(request, "sheet_viewer.html", {
+        "username": user.username,
+        "is_admin": user.is_admin,
+        "sheet_url": f"https://docs.google.com/spreadsheets/d/{gsheet_io.SHEET_ID}/edit",
+    })
+
+
+@app.get("/api/sheet/list-tabs")
+async def api_sheet_list_tabs(request: Request):
+    user = _get_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "未登入"}, status_code=401)
+    try:
+        sheet = gsheet_io.get_sheet()
+        tabs = gsheet_io.list_worksheets(sheet)
+        return JSONResponse({
+            "ok": True,
+            "tabs": tabs,
+            "sheet_url": f"https://docs.google.com/spreadsheets/d/{gsheet_io.SHEET_ID}/edit",
+        })
+    except FileNotFoundError:
+        return JSONResponse({
+            "ok": False,
+            "error": "找不到 .gsa.json — 請從父專案複製 service-account 憑證",
+        })
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"無法連 Google Sheet：{e}"})
+
+
+@app.get("/api/sheet/read-tab")
+async def api_sheet_read_tab(request: Request, name: str):
+    user = _get_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "未登入"}, status_code=401)
+    if not name or not name.strip():
+        return JSONResponse({"ok": False, "error": "缺少工作表名稱"}, status_code=400)
+    try:
+        sheet = gsheet_io.get_sheet()
+        data = gsheet_io.read_worksheet_grid(sheet, name)
+        return JSONResponse({"ok": True, **data})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"讀取「{name}」失敗：{e}"})
+
+
 # ── scheduling APIs ─────────────────────────────────────────────────
 @app.post("/api/sched/init")
 async def api_sched_init(request: Request):
@@ -478,46 +580,15 @@ async def api_sched_solve(request: Request):
         "stats_rows": result["stats_rows"],
         "monthly_stats_map": result["monthly_stats_map"],
         "baseline": baseline,
+        "targets": result["targets"],
     }
 
     # Projection of the cumulative tab AFTER writing this month — so the user
     # can sanity-check 累計值班總數 before clicking 寫入. If this same month was
     # previously written, the prev contribution is read off the sheet and
     # subtracted (mirrors update_cumulative_stats with previous_monthly=).
-    prev_monthly: dict = {}
-    try:
-        sheet = gsheet_io.get_sheet()
-        prev_monthly = gsheet_io.read_monthly_stats(sheet, f"{year}{month:02d} 班數統計")
-    except Exception:
-        prev_monthly = {}
-
-    # Per-cell math: projected = baseline - prev_contribution + new_contribution.
-    # All three components are returned so the UI can render them explicitly
-    # and the user can verify the math without trusting a single net delta.
-    KEY_PAIRS = [("平日", "平日班"), ("週五", "週五班"),
-                 ("週六", "週六班"), ("週日", "週日班"), ("假日", "假日班")]
-    projected_cum = []
-    monthly_map = result["monthly_stats_map"]
-    all_names = set(baseline) | set(monthly_map) | set(prev_monthly)
-    for name in sorted(all_names):
-        b = baseline.get(name, {})
-        new = monthly_map.get(name, {})
-        prev = prev_monthly.get(name, {})
-        row = {"姓名": name}
-        prev_contrib: dict[str, int] = {}
-        new_contrib: dict[str, int] = {}
-        for cum_key, mon_key in KEY_PAIRS:
-            base_val = b.get(cum_key, 0)
-            prev_val = prev.get(mon_key, 0)
-            new_val = new.get(mon_key, 0)
-            row[cum_key] = base_val - prev_val + new_val
-            prev_contrib[cum_key] = prev_val
-            new_contrib[cum_key] = new_val
-        row["總班數"] = row["平日"] + row["週五"] + row["假日"]
-        row["baseline"] = {k: b.get(k, 0) for k, _ in KEY_PAIRS}
-        row["prev_contribution"] = prev_contrib
-        row["new_contribution"] = new_contrib
-        projected_cum.append(row)
+    projected_cum, had_prev_monthly = _build_projection(
+        year, month, baseline, result["monthly_stats_map"])
 
     audit.log("sched_solve", user=user.username, ip=_client_ip(request),
               detail=(f"{year}/{month:02d} qod_relaxed={result['qod_relaxed']} "
@@ -535,9 +606,78 @@ async def api_sched_solve(request: Request):
             "cr_fri_target": result["targets"]["cr_fri_target"],
             "cr_sat_target": result["targets"]["cr_sat_target"],
             "cr_sun_target": result["targets"]["cr_sun_target"],
+            "cr_holiday_target": result["targets"].get("cr_holiday_target", {}),
         },
         "projected_cumulative": projected_cum,
-        "had_prev_monthly": bool(prev_monthly),
+        "had_prev_monthly": had_prev_monthly,
+    })
+
+
+@app.post("/api/sched/apply-edits")
+async def api_sched_apply_edits(request: Request):
+    """Apply the user's manual tweaks to the solved schedule.
+
+    Step 5 lets the user hand-edit the calendar (swap who's on which day)
+    after the solver runs. This endpoint takes the FINAL edited
+    `{iso_date: name}` map, recomputes stats / QOD / projection from it
+    (cv_solver.recompute_from_schedule — same classification the solver
+    uses), and overwrites the cached schedule so /api/sched/write and
+    /api/sched/handoff-to-keyin emit the edited result, not the original
+    solve. Requires a prior /api/sched/solve (the cache holds baseline +
+    targets, which a bare edit doesn't carry).
+    """
+    user = _get_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "未登入"}, status_code=401)
+    body = await request.json()
+    year  = int(body["year"])
+    month = int(body["month"])
+    sched_in = body.get("schedule") or {}
+    cache_key = f"{user.username}:{year}{month:02d}"
+    cached = _solve_cache.get(cache_key)
+    if cached is None:
+        return JSONResponse({"ok": False,
+                             "error": "請先按 solve 產生班表，再做手動微調"})
+
+    # Empty cells (user cleared a day) are simply dropped — that day stays
+    # unassigned and is excluded from every stat, mirroring a blank cell.
+    schedule = {_parse_iso_date(k): v.strip()
+                for k, v in sched_in.items() if v and v.strip()}
+
+    result = cv_solver.recompute_from_schedule(year, month, schedule)
+
+    cached.update({
+        "schedule": result["schedule"],
+        "stats_rows": result["stats_rows"],
+        "monthly_stats_map": result["monthly_stats_map"],
+    })
+
+    baseline = cached.get("baseline") or {}
+    projected_cum, had_prev_monthly = _build_projection(
+        year, month, baseline, result["monthly_stats_map"])
+    targets = cached.get("targets") or {}
+
+    audit.log("sched_apply_edits", user=user.username, ip=_client_ip(request),
+              detail=(f"{year}/{month:02d} days={len(schedule)} "
+                      f"qod={len(result['qod_violations'])}"))
+    return JSONResponse({
+        "ok": True,
+        "edited": True,
+        "schedule": _serialize_schedule(result["schedule"]),
+        "stats_rows": result["stats_rows"],
+        "qod_violations": [
+            {"date": d.strftime("%Y-%m-%d"), "name": n}
+            for d, n in result["qod_violations"]
+        ],
+        "qod_relaxed": result["qod_relaxed"],
+        "targets": {
+            "cr_fri_target": targets.get("cr_fri_target", {}),
+            "cr_sat_target": targets.get("cr_sat_target", {}),
+            "cr_sun_target": targets.get("cr_sun_target", {}),
+            "cr_holiday_target": targets.get("cr_holiday_target", {}),
+        },
+        "projected_cumulative": projected_cum,
+        "had_prev_monthly": had_prev_monthly,
     })
 
 

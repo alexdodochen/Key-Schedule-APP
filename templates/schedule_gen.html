@@ -32,6 +32,13 @@
     }
     .cal-cell.qod.holiday { background-color: #fef3c7; }
     .cal-cell.qod .doc { color: #b91c1c; }
+    .cal-cell .doc-edit {
+      width: 100%; margin-top: 4px; padding: 1px 2px;
+      font-weight: 600; color: #4f46e5; font-size: 13px;
+      border: 1px solid #d1d5db; border-radius: 4px; background: #fff;
+    }
+    .cal-cell .doc-edit.changed { color: #b45309; border-color: #f59e0b; background: #fffbeb; }
+    .cal-cell.qod .doc-edit { color: #b91c1c; border-color: #dc2626; }
   </style>
 </head>
 <body class="bg-gray-50 min-h-screen">
@@ -236,7 +243,8 @@
       <div id="qod-warn" class="hidden bg-red-50 border border-red-300 text-red-800 rounded-lg px-4 py-3 text-sm"></div>
 
       <div>
-        <h3 class="font-semibold text-gray-700 mb-2">排班月曆</h3>
+        <h3 class="font-semibold text-gray-700 mb-1">排班月曆</h3>
+        <p class="text-[11px] text-gray-500 mb-2">每格醫師可直接下拉手動微調；改過的格子會變琥珀色。調完按下方 <b>✎ 套用手調並重算</b>，統計與預估累計會依「生成 + 你手調」後的最終結果重算，再按寫入。</p>
         <div class="grid grid-cols-7 gap-1 text-xs font-medium text-gray-500 mb-1 text-center">
           <div>一</div><div>二</div><div>三</div><div>四</div><div>五</div><div>六</div><div>日</div>
         </div>
@@ -278,7 +286,17 @@
         </p>
       </div>
 
-      <div class="flex items-center gap-3 pt-3 border-t border-gray-100">
+      <div class="flex flex-wrap items-center gap-3 pt-3 border-t border-gray-100">
+        <button id="btn-apply-edits"
+          class="bg-amber-500 hover:bg-amber-600 text-white font-semibold px-4 py-2 rounded-lg text-sm transition">
+          ✎ 套用手調並重算
+        </button>
+        <button id="btn-revert-edits"
+          class="bg-gray-200 hover:bg-gray-300 text-gray-700 font-semibold px-4 py-2 rounded-lg text-sm transition">
+          ↺ 還原 solver 原班
+        </button>
+        <span id="edit-status" class="text-sm text-gray-500"></span>
+        <span class="flex-1"></span>
         <button id="btn-write"
           class="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold px-5 py-2 rounded-lg text-sm transition">
           ✓ 寫入 Google Sheet
@@ -323,10 +341,19 @@ const state = {
   vsHolidayExempt: [],  // VS names not taking any holiday shift this month
   prefs: {},      // {doctorName: Set<dateStr>} for VS/展瀚/建寬: prefer; for CR: avoid
   lastSolve: null,
+  solverOriginal: null,  // untouched solver output, for 還原 solver 原班
 };
 let _currentStep = 1;
 
 const WEEK_LABELS = ['一','二','三','四','五','六','日'];
+// Every doctor that can appear in a hand-edited cell (CR + 中級 + VS).
+const ALL_DOCTORS_FLAT = [...DOCTORS_CR, ...DOCTORS_MID, ...DOCTORS_VS];
+function docOptions(selected) {
+  return ['<option value=""></option>']
+    .concat(ALL_DOCTORS_FLAT.map(n =>
+      `<option value="${n}"${n === selected ? ' selected' : ''}>${n}</option>`))
+    .join('');
+}
 
 // ── helpers ─────────────────────────────────────────────────────────
 function $(id) { return document.getElementById(id); }
@@ -825,6 +852,8 @@ $('btn-solve').addEventListener('click', async () => {
     setStatus('solve-status', `❌ ${data.error}`, 'err'); return;
   }
   state.lastSolve = data;
+  state.solverOriginal = data;   // snapshot for 還原 solver 原班
+  setStatus('edit-status', '');
   renderResult(data);
   setStatus('solve-status',
     data.qod_relaxed
@@ -880,10 +909,19 @@ function renderResult(data) {
         <span class="text-[10px] text-gray-500">${WEEK_LABELS[d.weekday]}</span>
       </div>
       ${holidayLine}
-      <div class="doc">${docName}</div>
+      <select class="doc-edit" data-date="${d.date}" data-orig="${docName}">
+        ${docOptions(docName)}
+      </select>
     </div>`;
   });
   grid.innerHTML = cells;
+  // Mark hand-changed cells (value differs from solver's pick) in amber so
+  // the user can see at a glance what they tweaked before recomputing.
+  grid.querySelectorAll('.doc-edit').forEach(sel => {
+    const mark = () => sel.classList.toggle('changed', sel.value !== sel.dataset.orig);
+    sel.addEventListener('change', mark);
+    mark();
+  });
 
   // Stats — grouped by CR / 中級 / VS for easy scanning.
   const nonZero = data.stats_rows.filter(r => (r.平日班 + r.週五班 + r.假日班) > 0);
@@ -907,7 +945,10 @@ function renderResult(data) {
   const w = $('qod-warn');
   if (data.qod_violations.length > 0) {
     w.classList.remove('hidden');
-    w.innerHTML = `<b>QOD 警告</b> — 此月在嚴格不允許 QOD 條件下無解，已最小化為 ${data.qod_violations.length} 處隔日值班違規（紅底格子）：` +
+    const lead = data.edited
+      ? `<b>QOD 警告</b> — 手調後共 ${data.qod_violations.length} 處隔日值班（QOD，紅底格子）：`
+      : `<b>QOD 警告</b> — 此月在嚴格不允許 QOD 條件下無解，已最小化為 ${data.qod_violations.length} 處隔日值班違規（紅底格子）：`;
+    w.innerHTML = lead +
       data.qod_violations.map(v => `${v.date} ${v.name}`).join('；');
   } else {
     w.classList.add('hidden');
@@ -929,15 +970,60 @@ $('btn-write').addEventListener('click', async () => {
   setStatus('write-status', msg, 'ok');
 });
 
+// ── 手動微調 → 重算 ─────────────────────────────────────────────────
+// 收集月曆裡每格 <select> 的當前值，POST 給 /api/sched/apply-edits。
+// 後端用 cv_solver.recompute_from_schedule 依「生成 + 手調」最終結果重算
+// 統計 / QOD / 預估累計，並覆蓋伺服器端 cache，之後寫入/交 key 班都用
+// 手調後的版本。
+function collectEditedSchedule() {
+  const out = {};
+  document.querySelectorAll('#result-cal .doc-edit').forEach(sel => {
+    const v = sel.value.trim();
+    if (v) out[sel.dataset.date] = v;
+  });
+  return out;
+}
+
+async function applyEdits(schedule, statusMsg) {
+  setStatus('edit-status', '重算中…');
+  const data = await postJSON('/api/sched/apply-edits', {
+    year: state.year, month: state.month, schedule,
+  });
+  if (!data.ok) { setStatus('edit-status', '❌ ' + data.error, 'err'); return; }
+  state.lastSolve = data;          // write/handoff now emit the edited version
+  renderResult(data);
+  const changed = Object.keys(schedule).length;
+  setStatus('edit-status',
+    statusMsg || `✓ 已套用手調並重算（${changed} 天）`, 'ok');
+  setStatus('write-status', '');
+}
+
+$('btn-apply-edits').addEventListener('click', () => {
+  if (!state.lastSolve) return;
+  applyEdits(collectEditedSchedule());
+});
+
+$('btn-revert-edits').addEventListener('click', () => {
+  if (!state.solverOriginal) return;
+  if (!confirm('還原成 solver 原始班表？你的手動微調會被丟棄。')) return;
+  // Push the original schedule back through apply-edits so the server cache
+  // and the on-screen state are both reset to the solver's output.
+  const orig = {};
+  state.solverOriginal.schedule.forEach(s => { orig[s.date] = s.doctor; });
+  applyEdits(orig, '↺ 已還原為 solver 原班');
+});
+
 $('btn-resolve').addEventListener('click', () => {
   // 清掉舊班表 → 視覺上強調這是全新一輪 solve，避免使用者誤以為按了沒反應
   state.lastSolve = null;
+  state.solverOriginal = null;
   $('result-cal').innerHTML = '';
   $('result-stats').innerHTML = '';
   $('cr-target-table').innerHTML =
     '<tr><td colspan="5" class="text-center text-gray-400 py-2 text-xs">由 solver 決定</td></tr>';
   $('qod-warn').classList.add('hidden');
   setStatus('write-status', '');
+  setStatus('edit-status', '');
   setStatus('solve-status', '清除舊班表，重新生成中…');
   document.getElementById('btn-solve').click();
 });
@@ -1042,6 +1128,7 @@ function applyDraft(draft) {
   state.prefs = {};
   for (const k in (s.prefs || {})) state.prefs[k] = new Set(s.prefs[k]);
   state.lastSolve = s.lastSolve || null;
+  state.solverOriginal = s.lastSolve || null;  // revert baseline after reload
 
   // restore form inputs
   if (s.year) $('year').value = s.year;

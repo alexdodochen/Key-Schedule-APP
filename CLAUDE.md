@@ -84,8 +84,21 @@ Routes:
   reports the new commits. Templates auto-reload via Jinja, but Python code
   changes (`app.py`, `cv_solver.py`, `gsheet_io.py`…) need a manual app
   restart — the UI prompts for this whenever `restart_required` is true.
-- `GET /` → `home.html` (post-login menu — 排班 active, key 班 disabled)
+- `GET /` → `home.html` (post-login menu — 排班 / key 班 / 查閱班表 三張卡)
 - `GET /sched` → `schedule_gen.html` (5-step UI)
+- `GET /sheet` → `sheet_viewer.html` (read-only Google Sheet browser; sidebar
+  lists all worksheet tabs, right pane renders the chosen tab as a sticky-header
+  table). Uses the same `.gsa.json` service-account credential as the solver
+  pipeline. Pure read — no edit, no write. Useful for spot-checking 班數統計 /
+  值班總數統計 / 抽籤表 / monthly calendars without leaving the app.
+- `GET /api/sheet/list-tabs` — returns all worksheet titles (sorted by their
+  Sheet position) plus `{rows, cols}` metadata. Cached only on the client side;
+  the user can hit ↻ 重新整理清單 to refetch.
+- `GET /api/sheet/read-tab?name=<title>` — fetches a single worksheet via
+  `gsheet_io.read_worksheet_grid` (which trims trailing empty rows / cols so the
+  rendered table doesn't show a sea of blanks). Returns `{values: [[...]], rows,
+  cols, title}`. The viewer client-side caches per tab; ↻ 重新讀取 forces a
+  refresh.
 - `POST /api/sched/init` — load month context (H, W, baseline, calendar)
 - `POST /api/sched/compute` — given X (and optional `vs_holiday_exempt:
   [name, ...]`), return VS/建寬 counts + CR target totals. Exempt VS names are
@@ -105,8 +118,24 @@ Routes:
   uses it to switch the banner text between first-write vs rewrite. The Step 5
   table renders the math explicitly per cell (`projected` on top, `base
   −prev +new` underneath) so the user can spot any off-by-prev bug visually.
+- `POST /api/sched/apply-edits` — apply the user's manual Step-5 tweaks.
+  Body `{year, month, schedule: {iso_date: name}}` is the FINAL hand-edited
+  calendar. Recomputes stats / QOD / projection via
+  `cv_solver.recompute_from_schedule` (same `make_stat_type_fn` /
+  `_compute_stats` / `_scan_qod` the solver uses — so 假日==週六+週日 holds)
+  and **overwrites the cached schedule**, so a subsequent `/api/sched/write`
+  or `/api/sched/handoff-to-keyin` emits the edited result, not the original
+  solve. Requires a prior `/api/sched/solve` (the cache holds `baseline` +
+  `targets`, which a bare edit doesn't carry; targets stay pinned from the
+  solve since they describe the solver's caps, not the edited result).
+  Empty cells are dropped (that day stays unassigned). Returns the same
+  shape as `/solve` plus `edited: true`. `_build_projection(...)` is the
+  shared helper both `/solve` and `/apply-edits` use for
+  `projected_cumulative` (so the re-write prev-subtract works on the edited
+  schedule too).
 - `POST /api/sched/write` — write cached schedule to Google Sheet (calendar
-  tab + monthly stats tab + cumulative stats tab)
+  tab + monthly stats tab + cumulative stats tab). Writes whatever is in the
+  cache — i.e. the hand-edited schedule if `/apply-edits` was called.
 - `POST /api/sched/handoff-to-keyin` — bridge to Phase 2: splits the cached
   schedule into `vs_schedule` / `cr_schedule` by doctor pool, attaches
   `tw_holidays` for the month, stashes into `keyin_routes.prefill_cache`,
@@ -248,6 +277,17 @@ CV_APP-only helpers (don't backport without the same need):
   - **「重新跑 solver」按鈕** clears the result calendar / stats / target
     table before triggering a fresh `/api/sched/solve` call, so the user
     visibly sees a "clear → refill" rather than wondering if anything changed.
+  - **Step 5 手動微調** — each calendar cell renders a `<select.doc-edit>`
+    (blank + all CR/中級/VS) instead of a static name. Changed cells get the
+    `.changed` amber style (compared against `data-orig`). `✎ 套用手調並重算`
+    collects every select via `collectEditedSchedule()` → POSTs
+    `/api/sched/apply-edits` → `renderResult(data)` with `state.lastSolve`
+    replaced (so 寫入/交 key 班 use the edited version). `↺ 還原 solver 原班`
+    replays `state.solverOriginal` through the same endpoint so server cache
+    + screen both reset. `state.solverOriginal` is snapshotted on every fresh
+    solve and on draft load. The QOD banner switches wording when
+    `data.edited` (手調後 N 處 vs solver-relaxed). 重新跑 solver also clears
+    `solverOriginal` + `edit-status`.
   - **Step 5 stats tables grouping** — both `#result-stats` (班數統計) and
     `#projected-cum-table` (預估累計) render through `renderGroupedRows(...)`
     keyed off `DOCTOR_GROUPS = [CR: [常胤, 見賢, 麒翔], 中級: [展瀚, 建寬],

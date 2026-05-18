@@ -1,50 +1,51 @@
 ============================================
-  HANDOFF — Last Updated: 2026-05-18 10:45
+  HANDOFF — Last Updated: 2026-05-18 12:10
 ============================================
 
 [What this session did]
-  1. Diagnosed why 累計 假日 ≠ 週六+週日: old frozen 202508-202603 統計 used
-     legacy def (假日 = 實六+實日+國定另計). Current solver folds 國定 into
-     六/日 so 假日==六+日. Mismatch was pure definition-boundary legacy.
-  2. Recomputed 202508-202603 統計 from CV班表.xlsx via current stat logic
-     (recompute_hist.py). 243/243 days, per-doctor 總計 conserved vs old.
-     Fixed a year typo in CV班表.xlsx sheet 202602 (2/9–2/15 typed 2025).
-  3. Generated 202606 班數統計 from existing 202606 calendar tab; rebuilt
-     值班總數統計 = new snapshot + 202604 + 202605 + 202606 (gen_202606_stats.py).
-  4. All target tabs now satisfy 假日==週六+週日.
+  1. Diagnosed + fixed 累計 假日 ≠ 週六+週日: recomputed 202508-202603 統計
+     from CV班表.xlsx via current stat logic (recompute_hist.py). Generated
+     202606 班數統計 + rebuilt 值班總數統計 (gen_202606_stats.py). All tabs
+     now 假日==六+日; pushed (057766b).
+  2. NEW FEATURE — Step 5 manual schedule edit: solver output is now
+     hand-editable per-day before write. cv_solver.recompute_from_schedule
+     + POST /api/sched/apply-edits (overwrites cache → 寫入/交key班 use the
+     edited result) + editable <select> calendar with apply/revert buttons.
+     Tested (unit + TestClient e2e + /sched render). Documented in CLAUDE.md.
 
 [Current state]
-  - Branch: main, ahead of origin (was ahead 2 at session start + new work)
-  - Google Sheet: 202508-202603 統計, 202606 班數統計, 值班總數統計 all
-    rewritten & verified live. 值班總數統計_至2026/06 untouched (old variant).
-  - Backups: cumulative_backup_20260518T102656.json (snapshot rebuild),
-    cumulative_backup_20260518T103650.json (202606 rebuild) — both gitignored.
-  - New tools: recompute_hist.py, gen_202606_stats.py (renamed from _ scratch).
+  - Branch: main. 057766b pushed. Edit-feature commit pending (not yet
+    committed at handoff write — commit + push next).
+  - Google Sheet: 202508-202603 統計 / 202606 班數統計 / 值班總數統計 all
+    correct & live (假日==六+日). 值班總數統計_至2026/06 untouched.
+  - Pre-existing uncommitted (prior sessions, NOT this session): app.py,
+    gsheet_io.py, main.py, templates/home.html, sheet_viewer.html — left
+    as-is. This session also modified app.py + CLAUDE.md (edit feature) +
+    cv_solver.py + templates/schedule_gen.html.
 
 [Next steps]
-  - User to `git push origin main` (auto-mode blocks push to main; also still
-    carries pending 97e2d5f + 0364c4f from prior session per old handoff).
-  - For future months: copy gen_202606_stats.py → gen_{YYYYMM}_stats.py,
-    edit YEAR/MONTH/tab names, dry-run, then --apply (needs user auth +
-    dangerouslyDisableSandbox / `! ` prefix).
+  - Commit the edit feature (cv_solver.py, app.py, templates/schedule_gen.html,
+    CLAUDE.md) + push (needs explicit user PUSH auth — classifier blocks main).
+  - Manual UI sanity check in the desktop app: solve → tweak a cell → 套用
+    手調並重算 → stats/projection refresh → 寫入 uses edited version.
 
 [Known issues / blockers]
   - Bash sandbox blocks network → gspread scripts need
-    dangerouslyDisableSandbox:true (getaddrinfo failed otherwise).
-  - Auto-mode classifier blocks shared-Sheet writes even after
-    AskUserQuestion approval — needs explicit textual re-authorization.
+    dangerouslyDisableSandbox:true.
+  - Auto-mode classifier blocks shared-Sheet writes + push-to-main even
+    after AskUserQuestion; needs explicit textual re-authorization.
 
 [Don't repeat these mistakes]
-  - Don't trust CV班表.xlsx dates blindly — sheet 202602 had 2025/2 typo'd
-    for 2026/2; recompute_hist.py auto-corrects month-match/year-wrong only.
-  - 過年班 sheet in CV班表.xlsx is a stale duplicate — ignore; the {YYYYMM}
-    month sheet is authoritative.
-  - Don't touch frozen history without backup + dry-run sign-off first.
+  - Don't bundle prior sessions' uncommitted app.py/main.py/etc. into this
+    session's commits — scope commits to this session's files only.
+  - CV班表.xlsx sheet 202602 had 2025/2 year typo for 2026/2; 過年班 sheet
+    is a stale duplicate (ignore).
 
 [Relevant files]
-  - recompute_hist.py — rebuild 202508-202603 統計 from CV班表.xlsx
-  - gen_202606_stats.py — gen one month 班數統計 + rebuild cumulative
-  - CV班表.xlsx — hand-maintained master calendar (historical source)
+  - cv_solver.py — recompute_from_schedule (new pure fn)
+  - app.py — /api/sched/apply-edits, _build_projection helper
+  - templates/schedule_gen.html — editable Step-5 calendar + buttons
+  - recompute_hist.py / gen_202606_stats.py — sheet rebuild tools
 
 [Important memory files]
-  - reference_sheet_historical_snapshot_tab.md (updated — new def, tools, sandbox note)
+  - reference_sheet_historical_snapshot_tab.md (recompute tools + sandbox note)
